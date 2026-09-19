@@ -8,7 +8,13 @@ const appjs = fs.readFileSync("app.js", "utf8");
 let pass = 0, fail = 0; const out = [];
 const check = (n, c, x) => { if (c) { pass++; out.push("  ✅ " + n); } else { fail++; out.push("  ❌ " + n + (x ? "  → " + x : "")); } };
 
-let mode = "ok", lastNarr = null, aborted = false;
+let mode = "ok", lastNarr = null, aborted = false, genCalls = 0, calledModels = [], lastSumUrl = "", lastHeaders = null;
+// Google's real error bodies (shape of generativelanguage v1beta responses)
+const gErr = (st, message, details) => ({ ok: false, status: st, body: null,
+  json: async () => ({ error: { code: st, status: st === 429 ? "RESOURCE_EXHAUSTED" : "NOT_FOUND", message, details } }) });
+const quotaFail = (quotaId) => ({ "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+  violations: [{ quotaMetric: "generativelanguage.googleapis.com/generate_content_free_tier_requests", quotaId }] });
+const retryInfo = (d) => ({ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: d });
 const enc = new TextEncoder();
 // Faithful to real fetch: a stream that errors with AbortError when the
 // caller's signal fires, so the abort path is genuinely exercised.
@@ -32,13 +38,36 @@ function mkFetch() {
   return async (url, opts) => {
     const signal = opts && opts.signal;
     if (signal && signal.aborted) { const e = new Error("aborted"); e.name = "AbortError"; throw e; }
+    if (!opts || !opts.body) {
+      // ListModels (GET)
+      if (mode === "listbadkey") return gErr(400, "API key not valid. Please pass a valid API key.");
+      return { ok: true, status: 200, json: async () => ({ models: [
+        { name: "models/gemini-2.5-pro", displayName: "Gemini 2.5 Pro", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/gemini-flash-latest", displayName: "Gemini Flash Latest", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/gemini-embedding-001", displayName: "Embedding", supportedGenerationMethods: ["embedContent"] },
+        { name: "models/gemini-2.5-flash-preview-tts", displayName: "TTS", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/gemma-3-27b-it", displayName: "Gemma", supportedGenerationMethods: ["generateContent"] },
+      ] }) };
+    }
     const body = JSON.parse(opts.body);
     const sys = body.systemInstruction?.parts?.[0]?.text || "";
     const isSum = sys.includes("ผู้ช่วยสรุปเนื้อเรื่อง");
-    if (!isSum) lastNarr = body;
+    const model = (String(url).match(/models\/([^:?]+)/) || [])[1];
+    if (!isSum) { lastNarr = body; lastHeaders = opts.headers; }
+    else lastSumUrl = String(url);
     const mk = (s, st = 200) => ({ ok: st < 300, status: st, body: s, json: async () => ({ error: { message: "e" } }) });
     if (isSum) return mk(sse([tc("สรุปสั้น")]));
 
+    genCalls++; calledModels.push(model);
+    if (mode === "wantedDown" && model === "gemini-flash-latest")
+      return gErr(429, "Quota exceeded for metric: generate_content_free_tier_requests, limit: 0");
+    if (mode === "g404") return gErr(404, "models/gemini-3.8-flash is not found for API version v1beta");
+    if (mode === "g429zero") return gErr(429, "You exceeded your current quota. Quota exceeded for metric: generate_content_free_tier_requests, limit: 0, model: gemini-2.5-pro",
+      [quotaFail("GenerateRequestsPerDayPerProjectPerModel-FreeTier"), retryInfo("30s")]);
+    if (mode === "g429day") return gErr(429, "You exceeded your current quota. limit: 250",
+      [quotaFail("GenerateRequestsPerDayPerProjectPerModel-FreeTier"), retryInfo("20s")]);
+    if (mode === "g429min") { mode = "ok"; return gErr(429, "Please retry in 1.2s.",
+      [quotaFail("GenerateRequestsPerMinutePerProjectPerModel-FreeTier"), retryInfo("1s")]); }
     switch (mode) {
       case "fencedjson":
         return mk(sse([tc('เนื้อเรื่องปกติ\n<<STATE>>```json\n{"hp":7,"maxHp":20,"level":3,"xp":5,"skills":["a"],"inventory":[],"location":"ถ้ำ","npcs":[],"flags":[]}\n```')]));
@@ -224,6 +253,43 @@ out.push("[I] Retry with no turns yet");
 $("openDrawer").click(); await settle(5);
 $("retryBtn").click(); await settle(40);
 check("retry with empty history does not crash", $("game").style.display === "flex");
+
+out.push("[K] Gemini quota / model errors");
+const lastErr = () => { const e = [...$("log").querySelectorAll(".msg.err")].pop(); return e ? e.textContent : ""; };
+mode = "g404"; await turn("ทดสอบ404");
+check("404 names the model and points to model list", /ไม่พบโมเดล/.test(lastErr()) && /โหลดรายชื่อโมเดล/.test(lastErr()), lastErr());
+mode = "g429zero"; genCalls = 0; await turn("ทดสอบโควตา0");
+check("limit:0 explained as no free quota for model", /ไม่มีโควตาฟรี/.test(lastErr()), lastErr());
+check("limit:0 tries each fallback model once, no waiting loop", genCalls === 3, "calls=" + genCalls);
+mode = "g429day"; genCalls = 0; await turn("ทดสอบรายวัน");
+check("daily quota explained", /โควตารายวัน/.test(lastErr()), lastErr());
+check("daily quota tries each fallback model once", genCalls === 3, "calls=" + genCalls);
+$("log").querySelectorAll(".msg.err").forEach(e => e.remove());
+mode = "wantedDown"; calledModels = []; const aiB = aiN(); await turn("สลับโมเดล");
+check("model without quota → next model answers in one tap", aiN() === aiB + 1 && errN() === 0 && calledModels[1] === "gemini-3.1-flash-lite",
+  calledModels.join(","));
+check("user told which model was used", /สลับไปใช้/.test($("toast").textContent), $("toast").textContent);
+mode = "ok";
+check("API key sent in header, not in URL", lastHeaders && lastHeaders["x-goog-api-key"] === "K");
+check("thinking kept low on Gemini 3 / latest", lastNarr.generationConfig.thinkingConfig && lastNarr.generationConfig.thinkingConfig.thinkingLevel === "low");
+$("log").querySelectorAll(".msg.err").forEach(e => e.remove());
+const aiBeforeRetry = aiN();
+mode = "g429min"; genCalls = 0;
+$("actionInput").value = "ทดสอบต่อนาที"; $("sendBtn").click(); await settle(450);
+check("per-minute 429 waits and retries by itself", genCalls === 2 && aiN() === aiBeforeRetry + 1 && errN() === 0,
+  "calls=" + genCalls + " err=" + errN());
+mode = "ok";
+
+$("settingsBtn").click(); await settle(5);
+$("apiKeyInput").value = "K";
+$("loadModelsBtn").click(); await settle(30);
+const opts = [...$("modelSelect").options].map(o => o.value);
+check("model list fetched from key, text models only", opts.join(",") === "gemini-flash-latest,gemini-2.5-pro", opts.join(","));
+mode = "listbadkey";
+$("loadModelsBtn").click(); await settle(30);
+check("bad key reported when loading models", /API key ไม่ถูกต้อง/.test($("keyStatus").textContent), $("keyStatus").textContent);
+mode = "ok";
+$("settingsModal").querySelector("[data-close]").click(); await settle(5);
 
 out.push("[J] Runtime error scan");
 console.error = oe;

@@ -19,7 +19,7 @@ let mockMode = "ok";
 let lastRequestBody = null;
 let lastNarrativeBody = null;
 let callCount = 0;
-let summaryCalls = 0;
+let summaryCalls = 0, lastSummaryUrl = "";
 
 function sse(chunks) {
   const body = chunks.map(c => "data: " + JSON.stringify(c) + "\n\n").join("");
@@ -42,7 +42,7 @@ function makeFetch(win) {
     lastRequestBody = JSON.parse(opts.body);
     const sys = (lastRequestBody.systemInstruction?.parts?.[0]?.text) || "";
     const isSummary = sys.includes("ผู้ช่วยสรุปเนื้อเรื่อง");
-    if (isSummary) summaryCalls++; else lastNarrativeBody = lastRequestBody;
+    if (isSummary) { summaryCalls++; lastSummaryUrl = String(url); } else lastNarrativeBody = lastRequestBody;
 
     const mk = (stream, status = 200) => ({
       ok: status >= 200 && status < 300,
@@ -236,6 +236,8 @@ results.push("[8] BUG#2 — memory compression");
 summaryCalls = 0;
 for (let i = 0; i < 14; i++) await playTurn("เทิร์นที่ " + i);
 check("summarizer was invoked", summaryCalls > 0, "summaryCalls=" + summaryCalls);
+check("summaries run on the Lite model (spares main model quota)",
+  lastSummaryUrl.includes("/models/gemini-3.1-flash-lite:"), lastSummaryUrl);
 check("chapter marker rendered in log", $("log").querySelectorAll(".msg.chapter").length > 0,
   "chapters=" + $("log").querySelectorAll(".msg.chapter").length);
 const memTxt = $("memStat").textContent;

@@ -22,15 +22,27 @@
   // runaway state can never lock the game (BUG #2 fix).
   const PROMPT_CHAR_BUDGET = 400000;
 
-  const DEFAULT_MODEL = "gemini-flash-latest";
+  const DEFAULT_MODEL = "gemini-3.1-flash-lite";;
+  // Fallback only — the real list is fetched from the API key itself
+  // (ListModels), because which models a key can call varies per account.
+  // Model ids from ai.google.dev/gemini-api/docs/models. Free tier is
+  // Flash-only; Pro models need billing and answer 429 "limit: 0" without it.
   const MODELS = [
     { id: "gemini-flash-latest", label: "Gemini Flash (ล่าสุดเสมอ — แนะนำ)" },
-    { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash (เร็ว โครงเรื่องกระชับ)" },
-    { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash (เร็ว/ประหยัด)" },
-    { id: "gemini-pro-latest", label: "Gemini Pro (ล่าสุดเสมอ — ภาษาลึกซึ้ง)" },
-    { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview (คุณภาพสูงสุด)" },
-    { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro (ภาษาลึกซึ้ง/ช้ากว่า)" },
+    { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash" },
+    { id: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash-Lite (เร็ว/โควตาฟรีเยอะ)" },
+    { id: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite (เร็ว/โควตาฟรีเยอะ)" },
+    { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+    { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite" },
+    { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro (ต้องผูกบัตร — key ฟรีใช้ไม่ได้)" },
   ];
+  // Each model has its own free quota (per project). When one is exhausted
+  // or missing, the call moves on to the next — so one tap keeps working.
+  const FALLBACK_MODELS = ["gemini-flash-latest", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"];
+  // Background work (memory summaries) runs on a Lite model so it does not
+  // eat the main model's small per-minute quota right after every turn.
+  const SUMMARY_MODEL = "gemini-3.1-flash-lite";
+  const API_BASE = "https://generativelanguage.googleapis.com/v1beta/";
 
   // ============================================================
   // Small helpers
@@ -156,7 +168,105 @@
     return e;
   }
 
-  async function gemini({ system, turns, onText, temperature, maxTokens, signal }) {
+  function waitFor(ms, signal) {
+    return new Promise((resolve, reject) => {
+      if (signal && signal.aborted) return reject(apiErr("aborted", "ยกเลิกแล้ว"));
+      const t = setTimeout(resolve, ms);
+      if (signal) signal.addEventListener("abort", () => {
+        clearTimeout(t); reject(apiErr("aborted", "ยกเลิกแล้ว"));
+      }, { once: true });
+    });
+  }
+
+  async function readApiError(res) {
+    const info = { message: "", status: "", retryAfter: 0, perDay: false, zeroQuota: false };
+    let j = null;
+    try { j = await res.json(); } catch (e) { }
+    const err = (j && j.error) || {};
+    info.message = String(err.message || "");
+    info.status = String(err.status || "");
+    for (const d of (Array.isArray(err.details) ? err.details : [])) {
+      const type = String((d && d["@type"]) || "");
+      if (/RetryInfo$/.test(type) && d.retryDelay) {
+        info.retryAfter = Math.ceil(parseFloat(d.retryDelay) || 0);
+      }
+      if (/QuotaFailure$/.test(type) && Array.isArray(d.violations)) {
+        for (const v of d.violations) {
+          if (/PerDay/i.test(String(v.quotaId || v.quotaMetric || ""))) info.perDay = true;
+        }
+      }
+    }
+    if (!info.retryAfter) {
+      const m = info.message.match(/retry in ([\d.]+)\s*s/i);
+      if (m) info.retryAfter = Math.ceil(parseFloat(m[1]));
+    }
+    if (/limit:\s*0(?![\d.])/.test(info.message)) info.zeroQuota = true;
+    return info;
+  }
+
+  function httpErr(status, info, model) {
+    const detail = info.message;
+    let e;
+    if (status === 400 && /API key not valid|API_KEY_INVALID/i.test(detail)) e = apiErr("bad_key", "API key ไม่ถูกต้อง");
+    else if (status === 400) e = apiErr("bad_request", detail || "คำขอไม่ถูกต้อง");
+    else if (status === 403) e = apiErr("forbidden", "API key ไม่มีสิทธิ์เรียกโมเดล " + model + (detail ? " (" + detail + ")" : ""));
+    else if (status === 404) e = apiErr("no_model", "ไม่พบโมเดล \"" + model + "\" สำหรับ key นี้ — เปิดตั้งค่าแล้วกด 🔄 โหลดรายชื่อโมเดล");
+    else if (status === 429 && info.zeroQuota) e = apiErr("no_quota",
+      "โมเดล " + model + " ไม่มีโควตาฟรีสำหรับ key นี้ — เปลี่ยนเป็นรุ่น Flash หรือ Flash-Lite ในตั้งค่า");
+    else if (status === 429 && info.perDay) e = apiErr("no_quota",
+      "โควตารายวันของโมเดล " + model + " หมดแล้ว (รีเซ็ตราว 14:00-15:00 น. เวลาไทย) — เปลี่ยนโมเดลในตั้งค่าเพื่อเล่นต่อ");
+    else if (status === 429) {
+      e = apiErr("rate_limited", "เรียกถี่เกินโควตาต่อนาทีของโมเดลนี้ — " +
+        (info.retryAfter ? "รอ " + info.retryAfter + " วินาทีแล้วกดลองใหม่" : "รอสักครู่แล้วกดลองใหม่") +
+        " (ถ้าเป็นบ่อย ให้เปลี่ยนเป็นรุ่น Flash-Lite)");
+      e.transient = true;
+    }
+    else if (status === 503) { e = apiErr("server", "เซิร์ฟเวอร์ Gemini มีคนใช้เยอะ ลองใหม่อีกครั้ง"); e.transient = true; }
+    else if (status >= 500) e = apiErr("server", "เซิร์ฟเวอร์ Gemini ขัดข้อง ลองใหม่อีกครั้ง");
+    else e = apiErr("http_" + status, detail || ("HTTP " + status));
+    e.retryAfter = info.retryAfter;
+    return e;
+  }
+
+  // Ask Google which models this key can actually call.
+  async function listModels(apiKey) {
+    let res;
+    try {
+      res = await fetch(API_BASE + "models?pageSize=1000", { headers: { "x-goog-api-key": apiKey } });
+    } catch (e) {
+      throw apiErr("network", "เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ต");
+    }
+    if (!res.ok) throw httpErr(res.status, await readApiError(res), "");
+    const j = await res.json();
+    const skip = /embed|tts|image|audio|live|aqa|imagen|veo|robotics|computer-use|learnlm|gemma|native|dialog|thinking-exp/i;
+    const out = [];
+    for (const m of (j.models || [])) {
+      const id = String(m.name || "").replace(/^models\//, "");
+      const methods = m.supportedGenerationMethods || [];
+      if (!/^gemini/i.test(id) || skip.test(id)) continue;
+      if (methods.length && methods.indexOf("generateContent") < 0) continue;
+      out.push({ id, label: (m.displayName || id) + " — " + id });
+    }
+    // Flash first (best free quota), then others; stable aliases on top.
+    const rank = (id) => (/flash-lite/.test(id) ? 1 : /flash/.test(id) ? 0 : 2) * 10 + (/latest$/.test(id) ? 0 : 1);
+    out.sort((a, b) => rank(a.id) - rank(b.id) || b.id.localeCompare(a.id));
+    return out;
+  }
+
+  // Gemini 3 wants thinkingLevel, 2.5 wants thinkingBudget. Thinking tokens
+  // count against maxOutputTokens, and a story turn gains little from deep
+  // reasoning, so keep it low: faster replies, fewer "truncated" failures.
+  function thinkingFor(model) {
+    if (/^gemini-2\.5-flash/.test(model)) return { thinkingBudget: 0 };
+    if (/^gemini-(3|flash-latest|flash-lite-latest)/.test(model)) return { thinkingLevel: "low" };
+    return null;
+  }
+
+  // Errors that mean "this model can't serve you right now" — another
+  // model with its own quota may still work.
+  const SWITCHABLE = { no_model: 1, no_quota: 1, rate_limited: 1 };
+
+  async function gemini({ system, turns, onText, onStatus, temperature, maxTokens, signal, model, noFallback, quiet }) {
     if (!settings.apiKey) throw apiErr("no_key", "ยังไม่ได้ตั้งค่า API key");
 
     const contents = mapTurns(turns);
@@ -169,7 +279,7 @@
       contents,
       generationConfig: {
         temperature: temperature == null ? 0.9 : temperature,
-        maxOutputTokens: maxTokens || 2048,
+        maxOutputTokens: maxTokens || 8192,
       },
       safetySettings: [
         "HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH",
@@ -178,34 +288,66 @@
     };
     if (system) body.systemInstruction = { parts: [{ text: system }] };
 
-    const base = "https://generativelanguage.googleapis.com/v1beta/models/";
-    const url = base + encodeURIComponent(settings.model || DEFAULT_MODEL) +
-      ":streamGenerateContent?alt=sse&key=" + encodeURIComponent(settings.apiKey);
-
-    let res;
-    try {
-      res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal,
-      });
-    } catch (e) {
-      if (e && e.name === "AbortError") throw apiErr("aborted", "ยกเลิกแล้ว");
-      throw apiErr("network", "เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ต");
+    const wanted = model || settings.model || DEFAULT_MODEL;
+    const chain = [wanted];
+    if (!noFallback) {
+      for (const m of FALLBACK_MODELS.concat(settings.model || DEFAULT_MODEL)) {
+        if (chain.indexOf(m) < 0) chain.push(m);
+      }
     }
 
-    if (!res.ok) {
-      let detail = "";
-      try { const j = await res.json(); detail = (j.error && j.error.message) || ""; } catch (e) { }
-      if (res.status === 400 && /API key not valid/i.test(detail)) throw apiErr("bad_key", "API key ไม่ถูกต้อง");
-      if (res.status === 400) throw apiErr("bad_request", detail || "คำขอไม่ถูกต้อง");
-      if (res.status === 403) throw apiErr("forbidden", "API key ไม่มีสิทธิ์เรียกโมเดลนี้");
-      if (res.status === 404) throw apiErr("no_model", "ไม่พบโมเดลนี้ — ลองเปลี่ยนโมเดลในตั้งค่า");
-      if (res.status === 429) throw apiErr("rate_limited", "เรียกถี่เกินโควตา — รอสักครู่แล้วลองใหม่");
-      if (res.status >= 500) throw apiErr("server", "เซิร์ฟเวอร์ Gemini ขัดข้อง ลองใหม่อีกครั้ง");
-      throw apiErr("http_" + res.status, detail || ("HTTP " + res.status));
+    async function post(m) {
+      const think = thinkingFor(m);
+      const b = Object.assign({}, body, { generationConfig: Object.assign({}, body.generationConfig) });
+      if (think) b.generationConfig.thinkingConfig = think;
+      for (let attempt = 0; ; attempt++) {
+        let r;
+        try {
+          r = await fetch(API_BASE + "models/" + encodeURIComponent(m) + ":streamGenerateContent?alt=sse", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-goog-api-key": settings.apiKey },
+            body: JSON.stringify(b),
+            signal,
+          });
+        } catch (e) {
+          if (e && e.name === "AbortError") throw apiErr("aborted", "ยกเลิกแล้ว");
+          throw apiErr("network", "เชื่อมต่อไม่ได้ — ตรวจสอบอินเทอร์เน็ต");
+        }
+        if (r.ok) return r;
+        const info = await readApiError(r);
+        // A model that rejects the thinking setting: send it without one.
+        if (r.status === 400 && b.generationConfig.thinkingConfig && /thinking/i.test(info.message)) {
+          delete b.generationConfig.thinkingConfig;
+          continue;
+        }
+        const err = httpErr(r.status, info, m);
+        if (r.status === 503 && attempt < 1) {
+          if (onStatus) onStatus(4, attempt + 1);
+          await waitFor(4000, signal);
+          continue;
+        }
+        throw err;
+      }
     }
+
+    let res, used, firstErr = null, allRateLimited = true;
+    for (const m of chain) {
+      try { res = await post(m); used = m; break; }
+      catch (e) {
+        if (!SWITCHABLE[e.code]) throw e;
+        if (!firstErr) firstErr = e;
+        if (e.code !== "rate_limited") allRateLimited = false;
+      }
+    }
+    // Every model is only briefly over its per-minute limit: wait the time
+    // Google asks for, then try the first model once more.
+    if (!res && allRateLimited && firstErr.retryAfter && firstErr.retryAfter <= 60) {
+      if (onStatus) onStatus(firstErr.retryAfter, 1);
+      await waitFor(firstErr.retryAfter * 1000, signal);
+      res = await post(wanted); used = wanted;
+    }
+    if (!res) throw firstErr;
+    if (used !== wanted && !quiet) toast("⚠️ " + wanted + " ใช้ไม่ได้ตอนนี้ — สลับไปใช้ " + used + " ให้แทน", 4000);
 
     // SSE stream
     const reader = res.body.getReader();
@@ -247,7 +389,7 @@
 
     if (!full.trim()) {
       if (blockReason || finishReason === "SAFETY") throw apiErr("blocked", "เนื้อหาถูกบล็อกโดยตัวกรองความปลอดภัย ลองเปลี่ยนคำสั่ง");
-      if (finishReason === "MAX_TOKENS") throw apiErr("truncated", "คำตอบยาวเกินขีดจำกัด");
+      if (finishReason === "MAX_TOKENS") throw apiErr("truncated", "AI ใช้ token หมดก่อนตอบ (โมเดลคิดนานเกิน) — ลองใหม่ หรือเปลี่ยนเป็นรุ่น Flash");
       throw apiErr("empty", "AI ไม่ได้ตอบอะไรกลับมา ลองใหม่อีกครั้ง");
     }
     return { text: full, finishReason };
@@ -392,6 +534,9 @@
         system: systemRules(),
         turns,
         signal: currentAbort.signal,
+        onStatus: (sec, n) => {
+          bubble.textContent = "⏳ โควตาต่อนาทีเต็ม — รอ " + sec + " วินาทีแล้วลองให้อัตโนมัติ (ครั้งที่ " + n + ")…";
+        },
         onText: (t) => {
           bubble.textContent = t.split("<<STATE>>")[0];
           scrollLog();
@@ -495,7 +640,7 @@
             "ตัดคำบรรยายบรรยากาศที่ไม่จำเป็นออก:\n\n" + chunkText
         }],
         temperature: 0.3,
-        maxTokens: 800,
+        maxTokens: 2048, model: SUMMARY_MODEL, quiet: true,
       });
       summary = res.text.trim();
     } catch (e) {
@@ -543,7 +688,7 @@
             "รวมสรุปหลายตอนนี้ให้เหลือย่อหน้าเดียว 4-6 ประโยค คงเฉพาะเหตุการณ์/การตัดสินใจที่ยังสำคัญต่อเนื้อเรื่องระยะยาว " +
             "ตัดรายละเอียดที่จบไปแล้วออก:\n\n" + combined
         }],
-        temperature: 0.3, maxTokens: 800,
+        temperature: 0.3, maxTokens: 2048, model: SUMMARY_MODEL, quiet: true,
       });
       arc = res.text.trim();
     } catch (e) { console.warn("รวมตอนไม่สำเร็จ:", e); }
@@ -611,7 +756,7 @@
     };
     row.appendChild(retry);
 
-    if (e && (e.code === "no_key" || e.code === "bad_key" || e.code === "forbidden" || e.code === "no_model")) {
+    if (e && (e.code === "no_key" || e.code === "bad_key" || e.code === "forbidden" || e.code === "no_model" || e.code === "no_quota" || e.code === "rate_limited")) {
       const st = document.createElement("button");
       st.textContent = "⚙️ ตั้งค่า";
       st.onclick = openSettings;
@@ -1139,11 +1284,21 @@
   }
 
   // ---------- Settings ----------
+  let modelList = null; // models this key can call, fetched via ListModels
+
+  function fillModelSelect(current) {
+    const sel = $("modelSelect");
+    const list = (modelList && modelList.length) ? modelList.slice() : MODELS.slice();
+    if (current && !list.some(m => m.id === current)) {
+      list.unshift({ id: current, label: current + " (⚠️ ไม่พบในรายชื่อของ key นี้)" });
+    }
+    sel.innerHTML = list.map(m => '<option value="' + esc(m.id) + '">' + esc(m.label) + "</option>").join("");
+    sel.value = current || list[0].id;
+  }
+
   function openSettings() {
     $("apiKeyInput").value = settings.apiKey || "";
-    const sel = $("modelSelect");
-    sel.innerHTML = MODELS.map(m => '<option value="' + m.id + '">' + esc(m.label) + "</option>").join("");
-    sel.value = settings.model || DEFAULT_MODEL;
+    fillModelSelect(settings.model || DEFAULT_MODEL);
     $("keyStatus").textContent = settings.apiKey ? "✅ ตั้งค่าแล้ว" : "⚠️ ยังไม่ได้ตั้งค่า";
     $("keyStatus").className = settings.apiKey ? "keystat ok" : "keystat warn";
     openModal("settingsModal");
@@ -1159,6 +1314,27 @@
       toast("บันทึกการตั้งค่าแล้ว");
       closeModals();
     };
+    $("loadModelsBtn").onclick = async () => {
+      const key = $("apiKeyInput").value.trim();
+      if (!key) { toast("ใส่ API key ก่อน"); return; }
+      const btn = $("loadModelsBtn");
+      const prev = btn.textContent;
+      btn.disabled = true; btn.textContent = "กำลังโหลด…";
+      try {
+        const list = await listModels(key);
+        if (!list.length) throw apiErr("empty", "key นี้ไม่มีโมเดล Gemini ที่ใช้เขียนข้อความได้");
+        modelList = list;
+        await setSetting("modelList", list);
+        const cur = $("modelSelect").value;
+        fillModelSelect(list.some(m => m.id === cur) ? cur : list[0].id);
+        $("keyStatus").textContent = "✅ พบ " + list.length + " โมเดลที่ key นี้ใช้ได้ — เลือกแล้วกดบันทึก";
+        $("keyStatus").className = "keystat ok";
+      } catch (e) {
+        $("keyStatus").textContent = "❌ " + (e.message || "โหลดรายชื่อไม่สำเร็จ");
+        $("keyStatus").className = "keystat warn";
+      }
+      btn.disabled = false; btn.textContent = prev;
+    };
     $("testKeyBtn").onclick = async () => {
       const btn = $("testKeyBtn");
       const prev = btn.textContent;
@@ -1167,7 +1343,7 @@
       settings.apiKey = $("apiKeyInput").value.trim();
       settings.model = $("modelSelect").value;
       try {
-        await gemini({ turns: [{ role: "user", content: "ตอบกลับด้วยคำว่า OK เท่านั้น" }], maxTokens: 20, temperature: 0 });
+        await gemini({ turns: [{ role: "user", content: "ตอบกลับด้วยคำว่า OK เท่านั้น" }], maxTokens: 1024, temperature: 0, noFallback: true });
         $("keyStatus").textContent = "✅ ใช้งานได้";
         $("keyStatus").className = "keystat ok";
         toast("เชื่อมต่อ Gemini สำเร็จ");
@@ -1208,7 +1384,9 @@
     }
 
     settings.apiKey = await getSetting("apiKey", "");
-    settings.model = await getSetting("model", DEFAULT_MODEL);
+    settings.model = await getSetting("model", DEFAULT_MODEL) || DEFAULT_MODEL;
+    const savedList = await getSetting("modelList", null);
+    if (Array.isArray(savedList) && savedList.length) modelList = savedList;
 
     bindSetup(); bindInput(); bindDrawer(); bindTurnTools();
     bindStateEditor(); bindChapters(); bindExport(); bindSlots(); bindSettings();

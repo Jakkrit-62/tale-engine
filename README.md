@@ -104,8 +104,8 @@ app.js          ตรรกะเกม, Gemini client, IndexedDB, ระบบ
 manifest.json   ข้อมูล PWA
 sw.js           service worker (แคชเฉพาะตัวแอป)
 icons/          ไอคอน 192/512/maskable
-test.mjs        ชุดทดสอบหลัก 76 ข้อ
-test-edge.mjs   ชุดทดสอบ edge case 38 ข้อ
+test.mjs        ชุดทดสอบหลัก 77 ข้อ
+test-edge.mjs   ชุดทดสอบ edge case 50 ข้อ
 ```
 
 รันเทสต์:
@@ -125,7 +125,7 @@ node test-edge.mjs
 | `CTX_TRIGGER` | เกินเท่าไหร่จึงเริ่มบีบอัด | 24 |
 | `CHAPTER_COMPRESS_AT` | บทสรุปสะสมกี่ตอนจึงรวบเป็น arc | 10 |
 | `PROMPT_CHAR_BUDGET` | เพดานขนาด prompt (กันล็อกตาย) | 400000 |
-| `DEFAULT_MODEL` | โมเดลเริ่มต้น | `gemini-2.5-flash` |
+| `DEFAULT_MODEL` | โมเดลเริ่มต้น (เปลี่ยนได้ในตั้งค่า → 🔄 โหลดรายชื่อโมเดล) | `gemini-flash-latest` |
 
 ถ้าเนื้อเรื่องยังหลุดบริบท ลองเพิ่ม `CTX_KEEP` เป็น 24-32
 (แลกกับค่า token ต่อเทิร์นที่สูงขึ้น)
