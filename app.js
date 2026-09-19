@@ -146,7 +146,7 @@
   // ============================================================
   // Gemini API
   // ============================================================
-  let settings = { apiKey: "", model: DEFAULT_MODEL };
+  let settings = { apiKey: "", model: DEFAULT_MODEL, ttsRate: 0.85 };
 
   function mapTurns(turns) {
     // Gemini wants role "user" | "model"; merge consecutive same-role turns.
@@ -408,6 +408,10 @@
       title: "",
       name: "นักผจญภัยไร้นาม",
       charDesc: "", world: "", mode: "rpg",
+      // Story language/length. Older saves get "auto"/"short", which is
+      // exactly how the game behaved before these options existed.
+      lang: "auto", length: "short", pov: "second",
+      study: false, cefr: "B1", vocab: [],
       hp: 20, maxHp: 20, level: 1, xp: 0,
       skills: [], inventory: [],
       location: "", npcs: [], flags: [],
@@ -427,13 +431,73 @@
     dnd: "โหมด D&D: ระบบจะทอย d20 ให้อัตโนมัติและส่งมาในรูปแบบ [Dice: d20=X] ให้ตีความว่า 1=ล้มเหลวหายนะ, 2-5=ล้มเหลว/มีผลเสีย, 6-10=สำเร็จแบบมีราคาต้องจ่าย, 11-15=สำเร็จตามปกติ, 16-19=สำเร็จดีเยี่ยม, 20=สำเร็จเกินคาด และอ้างถึงผลทอยในเนื้อเรื่องอย่างเป็นธรรมชาติ",
   };
 
+  const LENGTH_RULES = {
+    short: "ครั้งละ 2-5 ย่อหน้าสั้น (ราว 150-250 คำ) กระชับ มีบรรยากาศ ไม่ยืดเยื้อ",
+    medium: "ครั้งละ 4-6 ย่อหน้า (ราว 350-500 คำ) มีทั้งการบรรยายฉาก บทสนทนา และความรู้สึกของตัวละคร",
+    long: "ครั้งละ 7-10 ย่อหน้า (ราว 700-1000 คำ) เขียนแบบนิยายเต็มรูปแบบ: บรรยายฉากผ่านประสาทสัมผัส มีบทสนทนาโต้ตอบ " +
+      "ความคิดภายในของตัวละคร และจังหวะที่ค่อยๆ ไต่ระดับความตึงเครียด ห้ามรีบสรุปเหตุการณ์",
+  };
+  const LENGTH_LABELS = { short: "สั้น", medium: "กลาง", long: "ยาว (นิยาย)" };
+
+  const CEFR_RULES = {
+    A2: "A2 (elementary): short, simple sentences; common everyday words; mostly past simple; avoid idioms",
+    B1: "B1 (intermediate): clear, natural sentences; everyday vocabulary plus some descriptive words; few idioms",
+    B2: "B2 (upper-intermediate): natural novel prose with varied sentence structure, phrasal verbs and some idioms",
+    C1: "C1 (advanced): rich literary prose, wide vocabulary, idioms and figurative language",
+  };
+  const CEFR_LABELS = { A2: "A2 พื้นฐาน", B1: "B1 กลาง", B2: "B2 กลาง-สูง", C1: "C1 สูง" };
+  const LANG_LABELS = { auto: "ตามภาษาที่พิมพ์", th: "ไทย", en: "English" };
+
+  // Study mode only makes sense when the story itself is in English.
+  const studyOn = () => !!(state && state.study && state.lang === "en");
+
+  function languageRules() {
+    if (state.lang === "en") {
+      return [
+        "- เขียนเนื้อเรื่องเป็นภาษาอังกฤษเสมอ แม้ผู้เล่นจะพิมพ์คำสั่งเป็นภาษาไทย (Write the story in English, like a published English novel)",
+        "- ระดับภาษาอังกฤษของผู้อ่าน: " + (CEFR_RULES[state.cefr] || CEFR_RULES.B1),
+      ];
+    }
+    if (state.lang === "th") return ["- เขียนเนื้อเรื่องเป็นภาษาไทยเสมอ แม้ผู้เล่นจะพิมพ์เป็นภาษาอื่น"];
+    return ["- ตอบเป็นภาษาเดียวกับที่ผู้เล่นพิมพ์มา (พิมพ์ไทยตอบไทย)"];
+  }
+
+  function povRule() {
+    if (state.pov === "third") {
+      return '- เล่าแบบบุรุษที่สาม อดีตกาล เหมือนนิยาย เรียกตัวเอกด้วยชื่อ "' + state.name + '" (ไม่ใช้ "คุณ"/"You")';
+    }
+    return '- เล่าแบบมุมมองบุรุษที่สอง ("คุณ..." / "You...")';
+  }
+
+  function studyRules() {
+    if (!studyOn()) return [];
+    return [
+      "",
+      "โหมดเพื่อการศึกษา (เปิดอยู่) — ผู้เล่นเป็นคนไทยที่อ่านนิยายนี้เพื่อฝึกภาษาอังกฤษ:",
+      "- หลังจบเนื้อเรื่อง ขึ้นบรรทัดใหม่แล้วพิมพ์ <<STUDY>> ตามด้วย JSON บรรทัดเดียว (ก่อน <<STATE>>):",
+      '  {"vocab":[{"word":string,"base":string,"pos":string,"th":string,"ex":string,"note":string}],"fix":null}',
+      "- vocab: เลือก 5-8 คำหรือวลีจากตอนนี้ที่ยากสำหรับผู้เรียนระดับ " + state.cefr +
+      " เน้นคำที่มีประโยชน์ใช้ได้จริง phrasal verb และสำนวน ห้ามเลือกชื่อเฉพาะหรือคำพื้นฐานเกินไป",
+      "  - word: คำ/วลีตามที่ปรากฏในเนื้อเรื่องตรงตัว (รูปเดียวกับในเรื่อง)",
+      "  - base: รูปพจนานุกรม เช่น trudged → trudge",
+      "  - pos: n. / v. / adj. / adv. / phr.v. / idiom / phr.",
+      "  - th: ความหมายภาษาไทยตามบริบทในเรื่อง",
+      "  - ex: ประโยคจากเนื้อเรื่องที่มีคำนี้ คัดลอกมาตรงตัว",
+      "  - note: อธิบายภาษาไทย 1 ประโยค เช่น วิธีใช้ ความรู้สึกของคำ หรือคำที่ใช้แทนได้",
+      "- ห้ามเลือกคำที่อยู่ในรายการ \"คำศัพท์ที่ผู้เล่นเรียนแล้ว\"",
+      '- fix: ถ้าผู้เล่นพิมพ์คำสั่งเป็นภาษาอังกฤษแล้วมีจุดผิดหรือไม่เป็นธรรมชาติ ให้ใส่ {"original":string,"better":string,"why":"อธิบายภาษาไทยสั้นๆ"} ' +
+      "ถ้าพิมพ์ถูกแล้ว พิมพ์เป็นภาษาไทย หรือเป็นการเปิดเรื่อง ให้ใส่ null",
+    ];
+  }
+
   function systemRules() {
     return [
       'คุณคือ Game Master ของเกม text-adventure ส่วนตัวแบบเล่นคนเดียว ชื่อ "Tale Engine"',
       "",
       "กติกาการเล่าเรื่อง:",
-      '- เล่าแบบมุมมองบุรุษที่สอง ("คุณ...") ครั้งละ 2-5 ย่อหน้าสั้น กระชับ มีบรรยากาศ ไม่ยืดเยื้อ',
-      "- ตอบเป็นภาษาเดียวกับที่ผู้เล่นพิมพ์มา (พิมพ์ไทยตอบไทย)",
+      povRule(),
+      "- ความยาว: " + (LENGTH_RULES[state.length] || LENGTH_RULES.short),
+      ...languageRules(),
       "- " + (MODE_RULES[state.mode] || MODE_RULES.rpg),
       "- จบทุกครั้งด้วยสถานการณ์ที่ผู้เล่นต้องตัดสินใจต่อ ห้ามเล่าแทนหรือเดาการกระทำของผู้เล่นเอง",
       "- คุณจะได้รับบทสรุปเนื้อเรื่องเก่า (ความจำระยะยาว) และสถานะโลก/ตัวละครล่าสุด ต้องยึดข้อมูลเหล่านี้เป็นความจริง ห้ามขัดแย้ง",
@@ -447,6 +511,7 @@
       "- ต้องส่งค่าปัจจุบันครบทุกฟิลด์เสมอ แม้ไม่มีอะไรเปลี่ยน",
       "- ห้ามพิมพ์อะไรต่อหลัง JSON",
       "- ห้ามตอบว่างเปล่า ต้องมีเนื้อเรื่องก่อน <<STATE>> เสมอ",
+      ...studyRules(),
     ].join("\n");
   }
 
@@ -466,9 +531,16 @@
     return state.chapters.map(c => "[" + (c.label || ("ตอนที่ " + c.index)) + "] " + c.summary).join("\n");
   }
 
+  const KNOWN_WORDS_SENT = 80;
+
   function memoryHeader() {
-    return "[บทสรุปเนื้อเรื่องที่ผ่านมา — ความจำระยะยาว]\n" + chaptersText() +
+    let h = "[บทสรุปเนื้อเรื่องที่ผ่านมา — ความจำระยะยาว]\n" + chaptersText() +
       "\n\n[สถานะโลก/ตัวละครล่าสุด]\n" + JSON.stringify(worldSnapshot());
+    if (studyOn() && state.vocab.length) {
+      h += "\n\n[คำศัพท์ที่ผู้เล่นเรียนแล้ว — ห้ามเลือกซ้ำ]\n" +
+        state.vocab.slice(-KNOWN_WORDS_SENT).map(v => v.base || v.word).join(", ");
+    }
+    return h;
   }
 
   // Hard budget guard: trims oldest raw ctx until the prompt fits.
@@ -538,21 +610,26 @@
           bubble.textContent = "⏳ โควตาต่อนาทีเต็ม — รอ " + sec + " วินาทีแล้วลองให้อัตโนมัติ (ครั้งที่ " + n + ")…";
         },
         onText: (t) => {
-          bubble.textContent = t.split("<<STATE>>")[0];
+          // hide the machine blocks (and a half-streamed "<<STU…" marker)
+          bubble.textContent = t.split(/<<(?:STATE|STUDY)>>/)[0].replace(/<<[A-Z]*>?$/, "");
           scrollLog();
         },
       });
 
-      const parts = res.text.split("<<STATE>>");
-      const narrative = (parts[0] || "").trim();
+      const reply = splitReply(res.text);
+      const narrative = reply.narrative;
 
       // BUG #3 fix: an empty narrative is never accepted and never stored.
       if (!narrative) throw apiErr("empty", "AI ตอบมาแต่ไม่มีเนื้อเรื่อง — กดลองใหม่");
 
-      bubble.classList.remove("streaming");
-      bubble.textContent = narrative;
+      const study = studyOn() ? parseStudy(reply.study) : null;
 
-      if (parts[1]) applyStatePatch(parts[1]);
+      bubble.classList.remove("streaming");
+      fillNarrative(bubble, narrative, study);
+      $("log").appendChild(aiTools(bubble, narrative));
+      if (study) $("log").appendChild(renderStudyCard(study));
+
+      if (reply.state) applyStatePatch(reply.state);
 
       // BUG #4 fix: the player's turn is committed to memory only here,
       // after a confirmed good reply. A failed turn leaves nothing behind.
@@ -564,7 +641,8 @@
         if (roll !== null) pushLog("dice", "🎲 d20 = " + roll);
         pushLog("user", rawAction);
       }
-      pushLog("assistant", narrative);
+      const aiEntry = pushLog("assistant", narrative, study ? { study } : null);
+      if (study) addToNotebook(study.vocab, aiEntry.t);
       state.lastAction = opts.isOpening ? null : rawAction;
       ok = true;
 
@@ -590,21 +668,79 @@
     return ok;
   }
 
-  function applyStatePatch(jsonText) {
-    let raw = String(jsonText).trim()
+  // Reply layout: narrative, then optional <<STUDY>>{…}, then <<STATE>>{…}.
+  // Models sometimes swap the two blocks, so both orders are accepted.
+  function splitReply(text) {
+    const out = { narrative: "", study: "", state: "" };
+    const re = /<<(STUDY|STATE)>>/g;
+    const marks = [];
+    let m;
+    while ((m = re.exec(text))) marks.push({ kind: m[1], at: m.index, end: re.lastIndex });
+    out.narrative = (marks.length ? text.slice(0, marks[0].at) : text).trim();
+    marks.forEach((k, i) => {
+      const body = text.slice(k.end, i + 1 < marks.length ? marks[i + 1].at : text.length);
+      if (k.kind === "STUDY" && !out.study) out.study = body;
+      if (k.kind === "STATE" && !out.state) out.state = body;
+    });
+    return out;
+  }
+
+  // Pull the first {...} object out of model text: tolerates code fences and
+  // trailing prose, and ignores braces inside JSON strings.
+  function extractJson(text) {
+    let raw = String(text || "").trim()
       .replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
-    // tolerate trailing prose after the object
     const first = raw.indexOf("{");
     if (first > 0) raw = raw.slice(first);
-    let depth = 0, end = -1;
+    let depth = 0, end = -1, inStr = false;
     for (let i = 0; i < raw.length; i++) {
-      if (raw[i] === "{") depth++;
-      else if (raw[i] === "}") { depth--; if (depth === 0) { end = i; break; } }
+      const c = raw[i];
+      if (inStr) {
+        if (c === "\\") i++;
+        else if (c === '"') inStr = false;
+      } else if (c === '"') inStr = true;
+      else if (c === "{") depth++;
+      else if (c === "}") { depth--; if (depth === 0) { end = i; break; } }
     }
     if (end > -1) raw = raw.slice(0, end + 1);
+    return JSON.parse(raw);
+  }
 
+  function parseStudy(text) {
+    if (!text || !text.trim()) return null;
     let p;
-    try { p = JSON.parse(raw); } catch (e) { console.warn("STATE JSON ไม่ถูกต้อง:", e); return; }
+    try { p = extractJson(text); } catch (e) { console.warn("STUDY JSON ไม่ถูกต้อง:", e); return null; }
+    const str = (v, max) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+    const vocab = (Array.isArray(p && p.vocab) ? p.vocab : [])
+      .filter(v => v && typeof v === "object")
+      .map(v => ({
+        word: str(v.word, 60), base: str(v.base, 60), pos: str(v.pos, 20),
+        th: str(v.th, 200), ex: str(v.ex, 400), note: str(v.note, 300),
+      }))
+      .filter(v => v.word && v.th)
+      .slice(0, 12);
+    let fix = null;
+    if (p && p.fix && typeof p.fix === "object") {
+      const f = { original: str(p.fix.original, 400), better: str(p.fix.better, 400), why: str(p.fix.why, 400) };
+      if (f.better && f.better !== f.original) fix = f;
+    }
+    return (vocab.length || fix) ? { vocab, fix } : null;
+  }
+
+  function addToNotebook(vocab, t) {
+    const seen = new Set(state.vocab.map(v => (v.base || v.word).toLowerCase()));
+    for (const v of vocab) {
+      const key = (v.base || v.word).toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      state.vocab.push(Object.assign({ t }, v));
+    }
+  }
+
+  function applyStatePatch(jsonText) {
+    let p;
+    try { p = extractJson(jsonText); } catch (e) { console.warn("STATE JSON ไม่ถูกต้อง:", e); return; }
+    if (!p || typeof p !== "object") return;
 
     const n = (v, f) => (typeof v === "number" && isFinite(v)) ? v : f;
     state.maxHp = Math.max(1, n(p.maxHp, state.maxHp));
@@ -738,6 +874,169 @@
     return el;
   }
 
+  // ---------- Study mode rendering ----------
+  const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  // Story text with each vocab word marked (first occurrence only). The
+  // text is escaped first and marks are inserted only between tags.
+  function fillNarrative(el, text, study) {
+    if (!study || !study.vocab.length) { el.textContent = text; return; }
+    let parts = [esc(text)];
+    study.vocab.forEach((v, i) => {
+      const re = new RegExp("(^|[^A-Za-z'])(" + reEsc(esc(v.word)) + ")(?![A-Za-z])", "i");
+      for (let k = 0; k < parts.length; k += 2) {
+        const hit = re.exec(parts[k]);
+        if (!hit) continue;
+        const at = hit.index + hit[1].length;
+        const seg = parts[k];
+        parts.splice(k, 1,
+          seg.slice(0, at),
+          '<mark class="vw" data-i="' + i + '">' + hit[2] + "</mark>",
+          seg.slice(at + hit[2].length));
+        break;
+      }
+    });
+    el.innerHTML = parts.join("");
+    el._study = study;
+  }
+
+  // ---------- Read aloud (browser speech synthesis, no API quota) ----------
+  const ttsSupported = () => !!(window.speechSynthesis && typeof window.SpeechSynthesisUtterance === "function");
+  const TTS_RATES = { "0.7": "ช้า", "0.85": "ค่อนข้างช้า", "1": "ปกติ", "1.15": "เร็ว" };
+  let reading = null; // { btn, bubble, chunks, i }
+
+  const isThai = (text) => (text.match(/[฀-๿]/g) || []).length > text.length * 0.2;
+
+  function pickVoice(lang) {
+    const voices = window.speechSynthesis.getVoices ? window.speechSynthesis.getVoices() : [];
+    const pre = lang.slice(0, 2);
+    const same = voices.filter(v => String(v.lang || "").replace("_", "-").toLowerCase().startsWith(pre));
+    return same.find(v => v.lang === lang && /google|natural|premium|enhanced/i.test(v.name)) ||
+      same.find(v => v.lang === lang) || same[0] || null;
+  }
+
+  // Short chunks: long single utterances get cut off on Chrome (~15 s).
+  function chunkForSpeech(text) {
+    const pieces = [];
+    for (const para of text.split(/\n+/)) {
+      const sentences = para.match(/[^.!?…]+(?:[.!?…]+["”’)]*|$)\s*/g) || [para];
+      for (let s of sentences) {
+        s = s.trim();
+        while (s.length > 240) {
+          let cut = s.lastIndexOf(" ", 220);
+          if (cut < 80) cut = 220;
+          pieces.push(s.slice(0, cut).trim());
+          s = s.slice(cut).trim();
+        }
+        if (s) pieces.push(s);
+      }
+    }
+    const out = [];
+    for (const p of pieces) {
+      if (out.length && out[out.length - 1].length + p.length < 200) out[out.length - 1] += " " + p;
+      else out.push(p);
+    }
+    return out;
+  }
+
+  function stopReading() {
+    if (!reading) return;
+    const r = reading;
+    reading = null;
+    r.btn.textContent = "🔊 ฟังตอนนี้";
+    r.btn.classList.remove("on");
+    r.bubble.classList.remove("reading");
+    if (ttsSupported()) window.speechSynthesis.cancel();
+  }
+
+  function readAloud(bubble, text, btn) {
+    if (reading && reading.btn === btn) { stopReading(); return; }
+    stopReading();
+    const lang = isThai(text) ? "th-TH" : "en-US";
+    const voice = pickVoice(lang);
+    if (lang === "th-TH" && !voice) toast("เครื่องนี้อาจไม่มีเสียงภาษาไทย — ลองติดตั้งในการตั้งค่า Text-to-speech ของเครื่อง", 4000);
+    const r = { btn, bubble, chunks: chunkForSpeech(text), i: 0 };
+    reading = r;
+    btn.classList.add("on");
+    bubble.classList.add("reading");
+    const next = () => {
+      if (reading !== r) return;
+      if (r.i >= r.chunks.length) { stopReading(); return; }
+      btn.textContent = "⏹ หยุด (" + (r.i + 1) + "/" + r.chunks.length + ")";
+      const u = new window.SpeechSynthesisUtterance(r.chunks[r.i++]);
+      u.lang = lang; u.rate = settings.ttsRate;
+      if (voice) u.voice = voice;
+      u.onend = next;
+      u.onerror = (e) => {
+        if (reading !== r) return;
+        if (e && (e.error === "interrupted" || e.error === "canceled")) return;
+        stopReading(); toast("อ่านออกเสียงไม่สำเร็จ");
+      };
+      window.speechSynthesis.speak(u);
+    };
+    window.speechSynthesis.cancel();
+    next();
+  }
+
+  // Row under each story bubble; hidden where the browser can't speak.
+  function aiTools(bubble, text) {
+    const row = document.createElement("div");
+    row.className = "msgtools";
+    if (!ttsSupported()) return row;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "🔊 ฟังตอนนี้";
+    btn.onclick = () => readAloud(bubble, text, btn);
+    row.appendChild(btn);
+    return row;
+  }
+
+  function speak(text) {
+    if (!ttsSupported()) { toast("เครื่องนี้ไม่รองรับการอ่านออกเสียง"); return; }
+    stopReading();
+    window.speechSynthesis.cancel();
+    const u = new window.SpeechSynthesisUtterance(text);
+    u.lang = "en-US"; u.rate = Math.min(settings.ttsRate, 0.9);
+    const voice = pickVoice("en-US");
+    if (voice) u.voice = voice;
+    window.speechSynthesis.speak(u);
+  }
+
+  function vocabItemEl(v) {
+    const item = document.createElement("div");
+    item.className = "vitem";
+    item.innerHTML =
+      '<div class="vtop"><b>' + esc(v.word) + "</b>" +
+      (v.base && v.base.toLowerCase() !== v.word.toLowerCase() ? ' <span class="dim">(' + esc(v.base) + ")</span>" : "") +
+      (v.pos ? ' <span class="pos">' + esc(v.pos) + "</span>" : "") +
+      '<button class="say" type="button" title="ฟังเสียง">🔊</button></div>' +
+      '<div class="vth">' + esc(v.th) + "</div>" +
+      (v.ex ? '<div class="vex">“' + esc(v.ex) + "”</div>" : "") +
+      (v.note ? '<div class="vnote">💡 ' + esc(v.note) + "</div>" : "");
+    item.querySelector(".say").onclick = () => speak(v.base || v.word);
+    return item;
+  }
+
+  function renderStudyCard(study) {
+    const box = document.createElement("details");
+    box.className = "msg study";
+    box.open = true;
+    const sum = document.createElement("summary");
+    sum.textContent = "📚 คำศัพท์ในตอนนี้ (" + study.vocab.length + " คำ)";
+    box.appendChild(sum);
+    for (const v of study.vocab) box.appendChild(vocabItemEl(v));
+    if (study.fix) {
+      const f = document.createElement("div");
+      f.className = "vfix";
+      f.innerHTML = '<div class="vfixhead">✍️ ภาษาอังกฤษที่คุณพิมพ์</div>' +
+        '<div class="vold">' + esc(study.fix.original) + "</div>" +
+        '<div class="vnew">→ ' + esc(study.fix.better) + "</div>" +
+        (study.fix.why ? '<div class="vnote">' + esc(study.fix.why) + "</div>" : "");
+      box.appendChild(f);
+    }
+    return box;
+  }
+
   function renderError(e, rawAction, opts) {
     const wrapEl = document.createElement("div");
     wrapEl.className = "msg err";
@@ -804,6 +1103,14 @@
     $("invList").innerHTML = state.inventory.length
       ? state.inventory.map(s => '<span class="tag">' + esc(s) + "</span>").join("")
       : '<span class="dim">ว่างเปล่า</span>';
+    $("langSelect").value = state.lang;
+    $("lengthSelect").value = state.length;
+    $("povSelect").value = state.pov;
+    $("studyToggle").checked = !!state.study;
+    $("cefrSelect").value = state.cefr;
+    $("studyOpts").style.display = state.lang === "en" ? "block" : "none";
+    $("vocabBtn").textContent = "📚 สมุดคำศัพท์ (" + state.vocab.length + " คำ)";
+    $("ttsRateSelect").value = String(settings.ttsRate);
     $("locationText").textContent = state.location || "-";
     $("npcsText").innerHTML = state.npcs.length ? state.npcs.map(esc).join("<br>") : '<span class="dim">-</span>';
     $("flagsText").innerHTML = state.flags.length ? state.flags.map(f => "• " + esc(f)).join("<br>") : '<span class="dim">-</span>';
@@ -818,6 +1125,7 @@
 
   function renderAll(showAll) {
     const l = $("log");
+    stopReading();
     l.innerHTML = "";
     const total = state.log.length;
     renderFrom = showAll ? 0 : Math.max(0, total - RENDER_WINDOW);
@@ -835,10 +1143,18 @@
       else if (m.role === "chapter") { el.className = "msg chapter"; el.textContent = "📖 บันทึกความทรงจำ: " + m.content; l.appendChild(el); continue; }
       else if (m.role === "dice") el.className = "msg dice";
       else el.className = "msg sys";
+      if (m.role === "assistant") {
+        fillNarrative(el, m.content, m.study);
+        l.appendChild(el);
+        l.appendChild(aiTools(el, m.content));
+        if (m.study) l.appendChild(renderStudyCard(m.study));
+        continue;
+      }
       el.textContent = m.content;
       l.appendChild(el);
     }
     updateHeader();
+    applyInputHint();
     renderDrawer();
     if (!showAll) scrollLog();
   }
@@ -880,8 +1196,21 @@
   };
 
   let chosenMode = "rpg";
+  const SETUP_DEFAULTS = { lang: "th", length: "medium", pov: "second" };
+  let chosen = Object.assign({}, SETUP_DEFAULTS);
+
+  // Button groups like <div class="modes" data-seg="lang"><button data-v="th">
+  function setSeg(key, value) {
+    chosen[key] = value;
+    document.querySelectorAll('[data-seg="' + key + '"] button').forEach(b =>
+      b.classList.toggle("active", b.dataset.v === value));
+    if (key === "lang") $("studyField").style.display = value === "en" ? "block" : "none";
+  }
 
   function bindSetup() {
+    document.querySelectorAll("[data-seg] button").forEach(b => {
+      b.onclick = () => setSeg(b.parentElement.dataset.seg, b.dataset.v);
+    });
     document.querySelectorAll(".mode-btn").forEach(b => {
       b.onclick = () => {
         document.querySelectorAll(".mode-btn").forEach(x => x.classList.remove("active"));
@@ -907,12 +1236,16 @@
         charDesc: $("setupChar").value.trim(),
         world: $("setupWorld").value.trim(),
         mode: chosenMode,
+        lang: chosen.lang, length: chosen.length, pov: chosen.pov,
+        study: chosen.lang === "en" && $("setupStudy").checked,
+        cefr: $("setupCefr").value,
       });
       show("game");
       $("log").innerHTML = "";
+      applyInputHint();
       await persist(true);
       const ok = await takeTurn(
-        "(เริ่มต้นการผจญภัย — เขียนฉากเปิดเรื่อง 2-4 ย่อหน้า แนะนำโลกและสถานการณ์เริ่มต้นของตัวละคร จบด้วยสถานการณ์ที่ต้องตัดสินใจ)",
+        "(เริ่มต้นการผจญภัย — เขียนฉากเปิดเรื่อง แนะนำโลกและสถานการณ์เริ่มต้นของตัวละคร จบด้วยสถานการณ์ที่ต้องตัดสินใจ)",
         { isOpening: true }
       );
       if (!ok) toast("เปิดเรื่องไม่สำเร็จ — กดลองใหม่ในกล่องข้อความแดง");
@@ -930,6 +1263,16 @@
     document.querySelectorAll(".preset-btn").forEach(x => x.classList.remove("active"));
     document.querySelectorAll(".mode-btn").forEach((x, i) => x.classList.toggle("active", i === 0));
     chosenMode = "rpg";
+    for (const k in SETUP_DEFAULTS) setSeg(k, SETUP_DEFAULTS[k]);
+    $("setupStudy").checked = true;
+    $("setupCefr").value = "B1";
+  }
+
+  // In English stories, nudge the player to write their actions in English too.
+  function applyInputHint() {
+    $("actionInput").placeholder = state && state.lang === "en"
+      ? "Type your action in English (Thai is OK too)…"
+      : "พิมพ์การกระทำของคุณ…";
   }
 
   // ============================================================
@@ -948,6 +1291,14 @@
     $("stopBtn").onclick = () => { if (currentAbort) currentAbort.abort(); };
     document.querySelectorAll("#chips button").forEach(b => {
       b.onclick = () => { $("actionInput").value = b.dataset.a; send(); };
+    });
+    // tap a highlighted word in the story → its Thai meaning
+    $("log").addEventListener("click", (e) => {
+      const mk = e.target.closest && e.target.closest("mark.vw");
+      const st = mk && mk.parentElement && mk.parentElement._study;
+      if (!st) return;
+      const v = st.vocab[+mk.dataset.i];
+      if (v) toast(v.word + (v.pos ? " (" + v.pos + ")" : "") + " — " + v.th, 4500);
     });
 
     async function send() {
@@ -1004,6 +1355,9 @@
   // everything back to and including the most recent user entry.
   function dropLastTurnLog(keepUser) {
     const idx = findLastIndex(state.log, m => m.role === "user");
+    // words learned in the dropped turn leave the notebook with it
+    const cutoff = idx < 0 ? 0 : state.log[idx].t;
+    state.vocab = state.vocab.filter(v => v.t < cutoff);
     if (idx < 0) { state.log.length = 0; return; }
     state.log.length = keepUser ? idx + 1 : idx;
   }
@@ -1037,6 +1391,35 @@
       renderDrawer();
       await persist(true);
       toast("เปลี่ยนโหมดเป็น " + state.mode.toUpperCase() + " แล้ว");
+    };
+
+    // language / length / study options — take effect from the next turn
+    const optChange = (id, apply, describe) => {
+      $(id).onchange = async () => {
+        apply();
+        renderDrawer(); applyInputHint();
+        await persist(true);
+        const msg = describe();
+        renderSys("⚙️ " + msg + " — มีผลตั้งแต่เทิร์นถัดไป");
+        pushLog("sys", msg);
+      };
+    };
+    optChange("langSelect", () => { state.lang = $("langSelect").value; },
+      () => "ภาษาเนื้อเรื่อง: " + LANG_LABELS[state.lang]);
+    optChange("lengthSelect", () => { state.length = $("lengthSelect").value; },
+      () => "ความยาวต่อตอน: " + LENGTH_LABELS[state.length]);
+    optChange("povSelect", () => { state.pov = $("povSelect").value; },
+      () => "มุมมองการเล่า: " + (state.pov === "third" ? "บุรุษที่ 3" : "บุรุษที่ 2"));
+    optChange("studyToggle", () => { state.study = $("studyToggle").checked; },
+      () => "โหมดเพื่อการศึกษา: " + (state.study ? "เปิด" : "ปิด"));
+    optChange("cefrSelect", () => { state.cefr = $("cefrSelect").value; },
+      () => "ระดับภาษาอังกฤษ: " + CEFR_LABELS[state.cefr]);
+    $("vocabBtn").onclick = openVocab;
+    // speech speed is a device preference, shared by every game
+    $("ttsRateSelect").onchange = async () => {
+      settings.ttsRate = parseFloat($("ttsRateSelect").value);
+      await setSetting("ttsRate", $("ttsRateSelect").value);
+      toast("ความเร็วเสียงอ่าน: " + TTS_RATES[$("ttsRateSelect").value]);
     };
 
     $("editStateBtn").onclick = openStateEditor;
@@ -1149,7 +1532,72 @@
     };
   }
 
+  // ---------- Vocabulary notebook ----------
+  function openVocab() {
+    $("vocabSearch").value = "";
+    renderVocabList();
+    openModal("vocabModal");
+  }
+  function renderVocabList() {
+    const box = $("vocabList");
+    const q = $("vocabSearch").value.trim().toLowerCase();
+    const list = state.vocab.slice().reverse().filter(v => !q ||
+      (v.word + " " + v.base + " " + v.th).toLowerCase().indexOf(q) >= 0);
+    $("vocabInfo").textContent = "ทั้งหมด " + state.vocab.length + " คำ" + (q ? " · ตรงกับคำค้น " + list.length + " คำ" : "") +
+      " — คำใหม่อยู่บนสุด";
+    box.innerHTML = "";
+    if (!list.length) {
+      box.innerHTML = '<div class="dim" style="padding:12px 0">' +
+        (state.vocab.length ? "ไม่พบคำที่ค้นหา" : "ยังไม่มีคำศัพท์ — เปิดโหมดเพื่อการศึกษาแล้วเล่นต่อ คำยากจะถูกเก็บไว้ที่นี่อัตโนมัติ") + "</div>";
+      return;
+    }
+    for (const v of list) {
+      const item = vocabItemEl(v);
+      const del = document.createElement("button");
+      del.className = "vdel"; del.type = "button"; del.textContent = "✕"; del.title = "ลบคำนี้";
+      del.onclick = async () => {
+        state.vocab.splice(state.vocab.indexOf(v), 1);
+        await persist(true);
+        renderVocabList(); renderDrawer();
+      };
+      item.querySelector(".vtop").appendChild(del);
+      box.appendChild(item);
+    }
+  }
+  function vocabToCsv() {
+    const cell = (s) => '"' + String(s || "").replace(/"/g, '""') + '"';
+    const rows = [["word", "base", "pos", "meaning_th", "example", "note"]]
+      .concat(state.vocab.map(v => [v.word, v.base, v.pos, v.th, v.ex, v.note]));
+    // BOM so Excel opens Thai text correctly
+    return "﻿" + rows.map(r => r.map(cell).join(",")).join("\r\n");
+  }
+  function bindVocab() {
+    $("vocabSearch").oninput = renderVocabList;
+    $("vocabCsv").onclick = () => {
+      if (!state.vocab.length) { toast("ยังไม่มีคำศัพท์"); return; }
+      download(safeName() + "-vocab.csv", vocabToCsv(), "text/csv;charset=utf-8");
+      toast("ดาวน์โหลดสมุดคำศัพท์แล้ว (นำเข้า Anki / Excel ได้)");
+    };
+  }
+
   // ---------- Export ----------
+  function studyToMarkdown(study) {
+    const lines = [];
+    if (study.vocab.length) {
+      lines.push("> **📚 Vocabulary**", ">");
+      for (const v of study.vocab) {
+        lines.push("> - **" + v.word + "**" + (v.pos ? " *(" + v.pos + ")*" : "") + " — " + v.th +
+          (v.note ? " · " + v.note : ""));
+      }
+    }
+    if (study.fix) {
+      lines.push(">", "> ✍️ ~~" + study.fix.original + "~~ → **" + study.fix.better + "**" +
+        (study.fix.why ? " — " + study.fix.why : ""));
+    }
+    lines.push("");
+    return lines;
+  }
+
   function storyToMarkdown() {
     const lines = [];
     lines.push("# " + (state.title || state.name));
@@ -1166,7 +1614,10 @@
     lines.push("");
     for (const m of state.log) {
       if (m.role === "user") lines.push("**▶ " + m.content + "**", "");
-      else if (m.role === "assistant") lines.push(m.content, "");
+      else if (m.role === "assistant") {
+        lines.push(m.content, "");
+        if (m.study) lines.push(...studyToMarkdown(m.study));
+      }
       else if (m.role === "dice") lines.push("*" + m.content + "*", "");
       else if (m.role === "chapter") lines.push("> 📖 " + m.content, "");
       else lines.push("*" + m.content + "*", "");
@@ -1245,7 +1696,8 @@
       info.className = "slotinfo";
       info.innerHTML = "<b>" + esc(s.title || s.name) + "</b>" +
         (state && s.id === state.id ? ' <span class="pill">กำลังเล่น</span>' : "") +
-        '<div class="dim">' + esc((s.mode || "rpg").toUpperCase()) + " · Lv." + (s.level || 1) +
+        '<div class="dim">' + esc((s.mode || "rpg").toUpperCase()) +
+        (s.lang === "en" ? " · EN" + (s.study ? " 📚" : "") : "") + " · Lv." + (s.level || 1) +
         " · " + (s.log ? s.log.length : 0) + " รายการ · " + fmtDate(s.updatedAt || s.createdAt || now()) + "</div>";
       const btns = document.createElement("div");
       btns.className = "slotbtns";
@@ -1385,11 +1837,16 @@
 
     settings.apiKey = await getSetting("apiKey", "");
     settings.model = await getSetting("model", DEFAULT_MODEL) || DEFAULT_MODEL;
+    const rate = String(await getSetting("ttsRate", "0.85"));
+    settings.ttsRate = TTS_RATES[rate] ? parseFloat(rate) : 0.85;
     const savedList = await getSetting("modelList", null);
     if (Array.isArray(savedList) && savedList.length) modelList = savedList;
 
     bindSetup(); bindInput(); bindDrawer(); bindTurnTools();
-    bindStateEditor(); bindChapters(); bindExport(); bindSlots(); bindSettings();
+    bindStateEditor(); bindChapters(); bindExport(); bindSlots(); bindSettings(); bindVocab();
+
+    // Chrome loads voices lazily; ask early so the first 🔊 gets a good one
+    if (ttsSupported() && window.speechSynthesis.getVoices) window.speechSynthesis.getVoices();
 
     const lastId = await getSetting("lastSave", null);
     let loaded = null;

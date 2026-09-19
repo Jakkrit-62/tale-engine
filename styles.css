@@ -181,3 +181,39 @@ header .icon-btn { background:none; border:none; font-size:22px; padding:4px 2px
 .slotbtns button.danger { background:none; color:var(--danger); border-color:var(--danger); }
 .pill { background:var(--accent); color:var(--accent-ink); border-radius:6px; padding:1px 6px; font-size:11px; }
 .loadmore { text-align:center !important; font-size:12.5px; color:var(--dim); margin:0 0 4px; }
+
+/* ---------- Study mode ---------- */
+.field label.switch, label.switch { display:flex; gap:10px; align-items:flex-start; text-transform:none;
+  letter-spacing:0; font-size:14.5px; color:var(--ink); margin:0; cursor:pointer; line-height:1.5; }
+label.switch input { width:20px; height:20px; margin:2px 0 0; flex-shrink:0; accent-color:var(--accent); }
+
+mark.vw { background:none; color:inherit; border-bottom:2px dotted var(--accent);
+  font-weight:600; cursor:pointer; padding:0; }
+
+.msg.study { align-self:flex-start; background:var(--bg-el); border:1px solid var(--accent);
+  border-left-width:4px; white-space:normal; font-size:14px; max-width:92%; }
+.msg.study summary { font-weight:700; cursor:pointer; color:var(--accent); padding:2px 0 4px; }
+.vitem { border-top:1px solid var(--border); padding:8px 0; }
+.vitem:first-of-type { border-top:none; }
+.vtop { display:flex; align-items:center; gap:6px; flex-wrap:wrap; font-size:15px; }
+.vtop .pos { font-size:11.5px; font-style:italic; color:var(--dim); background:var(--chip);
+  border-radius:6px; padding:1px 6px; }
+.vtop .say, .vtop .vdel { margin-left:auto; background:none; border:none; font-size:16px;
+  padding:2px 4px; color:var(--ink); line-height:1; }
+.vtop .vdel { margin-left:0; color:var(--dim); font-size:14px; }
+.vth { margin-top:2px; }
+.vex { margin-top:3px; font-style:italic; color:var(--dim); font-size:13px; }
+.vnote { margin-top:3px; font-size:13px; color:var(--dim); }
+.vfix { border-top:1px dashed var(--border); margin-top:4px; padding-top:8px; }
+.vfixhead { font-weight:700; margin-bottom:3px; }
+.vold { text-decoration:line-through; color:var(--danger); }
+.vnew { color:var(--ok); font-weight:600; }
+#vocabList .vitem { border-top:1px solid var(--border); }
+
+/* ---------- Read aloud ---------- */
+.msgtools { align-self:flex-start; display:flex; gap:6px; margin-top:-4px; }
+.msgtools:empty { display:none; }
+.msgtools button { background:var(--chip); border:1px solid var(--border); color:var(--ink);
+  border-radius:999px; padding:4px 12px; font-size:12.5px; }
+.msgtools button.on { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+.msg.ai.reading { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent); }

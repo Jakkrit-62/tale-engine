@@ -80,6 +80,47 @@
     </div>
   </div>
 
+  <div class="field">
+    <label>ภาษาของเนื้อเรื่อง</label>
+    <div class="modes" data-seg="lang">
+      <button type="button" data-v="th" class="active">ไทย<span>อ่านสบาย</span></button>
+      <button type="button" data-v="en">English<span>ฝึกภาษาอังกฤษ</span></button>
+    </div>
+  </div>
+
+  <div class="field" id="studyField" style="display:none">
+    <label class="switch">
+      <input type="checkbox" id="setupStudy" checked>
+      <span><b>📚 โหมดเพื่อการศึกษา</b><br>
+      <span class="dim sm">ท้ายทุกตอนมีคำศัพท์ยากพร้อมความหมายภาษาไทย แตะคำที่ไฮไลต์ในเรื่องเพื่อดูความหมาย
+      และถ้าพิมพ์คำสั่งเป็นภาษาอังกฤษ AI จะช่วยแก้ประโยคให้</span></span>
+    </label>
+    <label style="margin-top:12px">ระดับภาษาอังกฤษของคุณ</label>
+    <select id="setupCefr">
+      <option value="A2">A2 — พื้นฐาน (ประโยคง่าย คำศัพท์ทั่วไป)</option>
+      <option value="B1" selected>B1 — กลาง (อ่านนิยายเยาวชนได้)</option>
+      <option value="B2">B2 — กลาง-สูง (สำนวน phrasal verb)</option>
+      <option value="C1">C1 — สูง (ภาษาวรรณกรรม)</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <label>ความยาวต่อตอน</label>
+    <div class="modes" data-seg="length">
+      <button type="button" data-v="short">สั้น<span>~200 คำ</span></button>
+      <button type="button" data-v="medium" class="active">กลาง<span>~450 คำ</span></button>
+      <button type="button" data-v="long">ยาว<span>~900 คำ แบบนิยาย</span></button>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>มุมมองการเล่า</label>
+    <div class="modes" data-seg="pov">
+      <button type="button" data-v="second" class="active">บุรุษที่ 2<span>"คุณ…" / "You…"</span></button>
+      <button type="button" data-v="third">บุรุษที่ 3<span>แบบนิยาย ใช้ชื่อตัวละคร</span></button>
+    </div>
+  </div>
+
   <button id="startBtn" class="primary big">เริ่มการผจญภัย</button>
   <div class="hint" id="setupHint"></div>
 </div>
@@ -151,6 +192,50 @@
         <option value="story">Story — เน้นเนื้อเรื่อง</option>
         <option value="dnd">D&amp;D — ทอยลูกเต๋า</option>
       </select>
+    </div>
+
+    <div class="dsec">
+      <div class="dsechead"><span>ภาษา &amp; การเรียน</span></div>
+      <div class="grid2">
+        <div><label class="lbl">ภาษาเนื้อเรื่อง</label>
+          <select id="langSelect">
+            <option value="auto">ตามภาษาที่พิมพ์</option>
+            <option value="th">ไทย</option>
+            <option value="en">English</option>
+          </select></div>
+        <div><label class="lbl">ความยาวต่อตอน</label>
+          <select id="lengthSelect">
+            <option value="short">สั้น</option>
+            <option value="medium">กลาง</option>
+            <option value="long">ยาว (นิยาย)</option>
+          </select></div>
+      </div>
+      <label class="lbl">มุมมองการเล่า</label>
+      <select id="povSelect">
+        <option value="second">บุรุษที่ 2 — "คุณ…" / "You…"</option>
+        <option value="third">บุรุษที่ 3 — แบบนิยาย</option>
+      </select>
+      <div id="studyOpts">
+        <label class="switch" style="margin-top:12px">
+          <input type="checkbox" id="studyToggle">
+          <span><b>📚 โหมดเพื่อการศึกษา</b><br><span class="dim sm">อธิบายศัพท์ยากเป็นภาษาไทยท้ายตอน</span></span>
+        </label>
+        <label class="lbl">ระดับภาษาอังกฤษ</label>
+        <select id="cefrSelect">
+          <option value="A2">A2 — พื้นฐาน</option>
+          <option value="B1">B1 — กลาง</option>
+          <option value="B2">B2 — กลาง-สูง</option>
+          <option value="C1">C1 — สูง</option>
+        </select>
+      </div>
+      <label class="lbl">ความเร็วเสียงอ่าน (🔊 ฟังตอนนี้)</label>
+      <select id="ttsRateSelect">
+        <option value="0.7">ช้า — ฝึกฟังทีละคำ</option>
+        <option value="0.85">ค่อนข้างช้า</option>
+        <option value="1">ปกติ</option>
+        <option value="1.15">เร็ว</option>
+      </select>
+      <button id="vocabBtn" class="ghost full" style="margin-top:10px">📚 สมุดคำศัพท์</button>
     </div>
 
     <div class="dsec">
@@ -278,6 +363,18 @@
         <input type="file" id="impJson" accept="application/json,.json" hidden>
       </label>
       <div class="note">ไฟล์ .json เก็บทั้งเนื้อเรื่อง สถานะ และความจำ — นำเข้าแล้วจะสร้างเป็นเกมใหม่ ไม่ทับของเดิม</div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="vocabModal">
+  <div class="modalbox">
+    <div class="modalhead"><b>📚 สมุดคำศัพท์</b><button data-close class="x">✕</button></div>
+    <div class="modalbody">
+      <input type="text" id="vocabSearch" placeholder="ค้นหาคำ หรือความหมายภาษาไทย">
+      <div class="sm dim" id="vocabInfo" style="margin:8px 0"></div>
+      <div id="vocabList"></div>
+      <button id="vocabCsv" class="ghost full" style="margin-top:12px">⬇️ ดาวน์โหลด .csv (ใช้กับ Anki / Excel)</button>
     </div>
   </div>
 </div>
