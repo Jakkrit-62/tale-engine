@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#8a3b2b" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#171310" media="(prefers-color-scheme: dark)">
+<meta name="description" content="เกม AI text-adventure ส่วนตัว เล่นคนเดียว ขับเคลื่อนด้วย Gemini">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Tale Engine">
+<link rel="manifest" href="./manifest.json">
+<link rel="icon" href="./icons/icon-192.png">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+<title>Tale Engine</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<div id="overlay"></div>
+<div id="toast"></div>
+
+<!-- ============ BOOT ============ -->
+<div id="boot">
+  <div class="bootbox">
+    <div class="bootlogo">🗡️</div>
+    <div class="bootname">Tale Engine</div>
+    <div id="bootMsg" class="dim">กำลังโหลด…</div>
+  </div>
+</div>
+
+<!-- ============ SETUP ============ -->
+<div id="setup" style="display:none">
+  <div class="setuphead">
+    <h1>🗡️ Tale Engine</h1>
+    <div class="setupactions">
+      <button id="setupSlotsBtn" class="ghost">💾 เกมที่บันทึกไว้</button>
+      <button id="setupSettingsBtn" class="ghost">⚙️ ตั้งค่า</button>
+    </div>
+  </div>
+  <div class="sub">เกม AI text-adventure ส่วนตัว — สร้างโลกของคุณเอง แล้วให้ AI เล่นเป็น Game Master ข้อมูลทั้งหมดเก็บอยู่ในเครื่องนี้เท่านั้น</div>
+
+  <div class="field">
+    <label>ชื่อเรื่อง (ไว้แยกเกมหลายเรื่อง — เว้นว่างได้)</label>
+    <input type="text" id="setupTitle" placeholder="เช่น ตำนานดาบเงา">
+  </div>
+  <div class="field">
+    <label>ชื่อตัวละคร</label>
+    <input type="text" id="setupName" placeholder="เช่น Kael">
+  </div>
+
+  <div class="field">
+    <label>เทมเพลตโลก (กดเพื่อเติมอัตโนมัติ ปรับแก้เองได้)</label>
+    <div class="chiprow">
+      <button type="button" class="preset-btn" data-preset="darkfantasy">⚔️ แฟนตาซีมืด</button>
+      <button type="button" class="preset-btn" data-preset="scifi">🛰️ ไซไฟ Dystopia</button>
+      <button type="button" class="preset-btn" data-preset="horror">🕯️ สยองขวัญ</button>
+      <button type="button" class="preset-btn" data-preset="magicschool">📚 โรงเรียนเวทมนตร์</button>
+      <button type="button" class="preset-btn" data-preset="postapoc">☢️ หลังหายนะ</button>
+      <button type="button" class="preset-btn" data-preset="custom">✍️ เขียนเอง</button>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>รูปลักษณ์ / บุคลิก / ที่มา (background ตัวละคร)</label>
+    <textarea id="setupChar" placeholder="เช่น นักดาบเร่ร่อนเงียบขรึม อดีตทหารที่หนีออกจากกองทัพ"></textarea>
+  </div>
+  <div class="field">
+    <label>ฉาก / โลก / แนวเรื่อง (background โลก)</label>
+    <textarea id="setupWorld" placeholder="เช่น แฟนตาซียุคกลางที่เวทมนตร์กำลังเลือนหาย"></textarea>
+  </div>
+
+  <div class="field">
+    <label>โหมดการเล่น</label>
+    <div class="modes">
+      <button type="button" class="mode-btn active" data-mode="rpg">RPG<span>สกิล/ไอเทม</span></button>
+      <button type="button" class="mode-btn" data-mode="story">Story<span>เน้นเนื้อเรื่อง</span></button>
+      <button type="button" class="mode-btn" data-mode="dnd">D&amp;D<span>ทอยลูกเต๋า</span></button>
+    </div>
+  </div>
+
+  <button id="startBtn" class="primary big">เริ่มการผจญภัย</button>
+  <div class="hint" id="setupHint"></div>
+</div>
+
+<!-- ============ GAME ============ -->
+<div id="game" style="display:none">
+  <header>
+    <div class="titlewrap">
+      <div class="title" id="headerTitle">Tale Engine</div>
+      <div class="hp" id="headerHp"></div>
+    </div>
+    <span id="saveDot" class="savedot ok" title="บันทึกแล้ว"></span>
+    <button class="icon-btn" id="openDrawer">☰</button>
+  </header>
+
+  <div id="log"></div>
+
+  <div class="chips" id="chips">
+    <button data-a="มองไปรอบๆ อย่างละเอียด">👀 มองรอบตัว</button>
+    <button data-a="ตรวจดูกระเป๋าและไอเทมที่มี">🎒 เช็คไอเทม</button>
+    <button data-a="พักและตั้งสติ">🧘 พักผ่อน</button>
+    <button data-a="เดินหน้าต่อไปอย่างระมัดระวัง">🚶 เดินต่อ</button>
+    <button data-a="พูดคุยกับคนที่อยู่ตรงหน้า">💬 พูดคุย</button>
+  </div>
+
+  <div id="inputbar">
+    <textarea id="actionInput" rows="1" placeholder="พิมพ์การกระทำของคุณ…"></textarea>
+    <button id="sendBtn" title="ส่ง">➤</button>
+    <button id="stopBtn" title="หยุด" style="display:none">■</button>
+  </div>
+</div>
+
+<!-- ============ DRAWER ============ -->
+<div id="drawer">
+  <button class="drawer-close" id="drawerClose">✕</button>
+  <div class="drawer-inner">
+
+    <div class="dsec">
+      <div class="dsechead"><span>ตัวละคร (background)</span>
+        <button class="lnk" id="editCharBtn">✏️ แก้ไข</button></div>
+      <div id="charName" class="bigname"></div>
+      <div id="charDescView" class="dim sm"></div>
+      <div id="charDescEdit" style="display:none">
+        <textarea id="charDescInput" rows="3"></textarea>
+        <div class="row2">
+          <button id="saveCharBtn" class="primary sm">บันทึก</button>
+          <button id="cancelCharBtn" class="ghost sm">ยกเลิก</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="dsec">
+      <div class="dsechead"><span>โลก / ฉาก (background)</span>
+        <button class="lnk" id="editWorldBtn">✏️ แก้ไข</button></div>
+      <div id="worldView" class="dim sm"></div>
+      <div id="worldEdit" style="display:none">
+        <textarea id="worldInput" rows="4"></textarea>
+        <div class="row2">
+          <button id="saveWorldBtn" class="primary sm">บันทึก</button>
+          <button id="cancelWorldBtn" class="ghost sm">ยกเลิก</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="dsec">
+      <div class="dsechead"><span>โหมดการเล่น</span><span class="dim sm" id="modeView"></span></div>
+      <select id="modeSelect">
+        <option value="rpg">RPG — เน้นสกิล/ไอเทม</option>
+        <option value="story">Story — เน้นเนื้อเรื่อง</option>
+        <option value="dnd">D&amp;D — ทอยลูกเต๋า</option>
+      </select>
+    </div>
+
+    <div class="dsec">
+      <div class="dsechead"><span>สถานะ</span>
+        <button class="lnk" id="editStateBtn">🛠️ แก้ไข</button></div>
+      <div class="statrow"><span id="hpText"></span><span id="lvText"></span></div>
+      <div class="bar-bg"><div class="bar-fill" id="hpBar"></div></div>
+      <div class="lbl">สกิล</div>
+      <div class="taglist" id="skillsList"></div>
+      <div class="lbl">ไอเทม</div>
+      <div class="taglist" id="invList"></div>
+      <div class="lbl">สถานที่ปัจจุบัน</div>
+      <div class="sm" id="locationText">-</div>
+      <div class="lbl">ตัวละครที่เคยเจอ</div>
+      <div class="sm" id="npcsText">-</div>
+      <div class="lbl">เหตุการณ์สำคัญ</div>
+      <div class="sm" id="flagsText">-</div>
+    </div>
+
+    <div class="dsec">
+      <div class="dsechead"><span>ความจำระยะยาว</span></div>
+      <div class="sm dim" id="memStat">-</div>
+      <button id="chaptersBtn" class="ghost full">📖 ดู / แก้ไขบทสรุป</button>
+    </div>
+
+    <div class="dsec">
+      <div class="dsechead"><span>เทิร์น</span></div>
+      <div class="row2">
+        <button id="retryBtn" class="ghost sm">🔄 ลองใหม่</button>
+        <button id="undoBtn" class="ghost sm">↩️ ย้อน 1 เทิร์น</button>
+      </div>
+    </div>
+
+    <div class="dsec">
+      <button id="exportBtn" class="ghost full">📤 ส่งออก / นำเข้า</button>
+      <button id="slotsBtn" class="ghost full">💾 เกมที่บันทึกไว้</button>
+      <button id="settingsBtn" class="ghost full">⚙️ ตั้งค่า API</button>
+      <button id="newGameBtn" class="danger full">✨ เริ่มการผจญภัยใหม่</button>
+    </div>
+
+  </div>
+</div>
+
+<!-- ============ MODALS ============ -->
+<div class="modal" id="settingsModal">
+  <div class="modalbox">
+    <div class="modalhead"><b>⚙️ ตั้งค่า</b><button data-close class="x">✕</button></div>
+    <div class="modalbody">
+      <label class="lbl">Gemini API key</label>
+      <div class="keyrow">
+        <input type="password" id="apiKeyInput" placeholder="วาง API key ที่นี่" autocomplete="off" spellcheck="false">
+        <button id="toggleKeyBtn" class="ghost sq">👁️</button>
+      </div>
+      <div id="keyStatus" class="keystat warn">⚠️ ยังไม่ได้ตั้งค่า</div>
+      <div class="note">
+        รับ key ฟรีที่ <b>aistudio.google.com/apikey</b> — key ถูกเก็บไว้ในเครื่องนี้เท่านั้น
+        (IndexedDB) ไม่ถูกส่งไปที่ไหนนอกจาก Google โดยตรง
+      </div>
+
+      <label class="lbl">โมเดล</label>
+      <select id="modelSelect"></select>
+
+      <div class="row2" style="margin-top:14px">
+        <button id="testKeyBtn" class="ghost">🔌 ทดสอบการเชื่อมต่อ</button>
+        <button id="saveKeyBtn" class="primary">บันทึก</button>
+      </div>
+      <button id="clearKeyBtn" class="danger full" style="margin-top:8px">🗑️ ลบ API key ออกจากเครื่อง</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="stateModal">
+  <div class="modalbox">
+    <div class="modalhead"><b>🛠️ แก้ไขสถานะ</b><button data-close class="x">✕</button></div>
+    <div class="modalbody">
+      <div class="grid2">
+        <div><label class="lbl">HP</label><input type="number" id="seHp"></div>
+        <div><label class="lbl">HP สูงสุด</label><input type="number" id="seMaxHp"></div>
+        <div><label class="lbl">Level</label><input type="number" id="seLevel"></div>
+        <div><label class="lbl">XP</label><input type="number" id="seXp"></div>
+      </div>
+      <label class="lbl">สถานที่ปัจจุบัน</label>
+      <input type="text" id="seLocation">
+      <label class="lbl">สกิล (บรรทัดละ 1 รายการ)</label>
+      <textarea id="seSkills" rows="3"></textarea>
+      <label class="lbl">ไอเทม (บรรทัดละ 1 รายการ)</label>
+      <textarea id="seInv" rows="3"></textarea>
+      <label class="lbl">ตัวละครที่เคยเจอ (บรรทัดละ 1 รายการ)</label>
+      <textarea id="seNpcs" rows="3"></textarea>
+      <label class="lbl">เหตุการณ์สำคัญ (บรรทัดละ 1 รายการ)</label>
+      <textarea id="seFlags" rows="3"></textarea>
+      <button id="seSave" class="primary full" style="margin-top:12px">บันทึกสถานะ</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="chaptersModal">
+  <div class="modalbox">
+    <div class="modalhead"><b>📖 ความจำระยะยาว</b><button data-close class="x">✕</button></div>
+    <div class="modalbody">
+      <div class="note">นี่คือสิ่งที่ AI "จำ" ได้จากช่วงเนื้อเรื่องที่ผ่านไปแล้ว แก้ไขได้ถ้ามีจุดที่จำผิด</div>
+      <div id="chaptersList"></div>
+      <button id="chapSave" class="primary full" style="margin-top:12px">บันทึกการแก้ไข</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="exportModal">
+  <div class="modalbox">
+    <div class="modalhead"><b>📤 ส่งออก / นำเข้า</b><button data-close class="x">✕</button></div>
+    <div class="modalbody">
+      <div class="sm dim" id="exportInfo"></div>
+      <div class="lbl">ส่งออกเนื้อเรื่อง</div>
+      <button id="expMd" class="ghost full">📝 Markdown (.md) — จัดรูปแบบสวย</button>
+      <button id="expTxt" class="ghost full">📄 ข้อความล้วน (.txt)</button>
+      <button id="expCopy" class="ghost full">📋 คัดลอกทั้งหมด</button>
+      <div class="lbl">สำรอง / ย้ายเครื่อง</div>
+      <button id="expJson" class="ghost full">💾 ดาวน์โหลดเซฟเต็ม (.json)</button>
+      <label class="ghost full filelbl">📥 นำเข้าเซฟ (.json)
+        <input type="file" id="impJson" accept="application/json,.json" hidden>
+      </label>
+      <div class="note">ไฟล์ .json เก็บทั้งเนื้อเรื่อง สถานะ และความจำ — นำเข้าแล้วจะสร้างเป็นเกมใหม่ ไม่ทับของเดิม</div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="slotsModal">
+  <div class="modalbox">
+    <div class="modalhead"><b>💾 เกมที่บันทึกไว้</b><button data-close class="x">✕</button></div>
+    <div class="modalbody">
+      <div id="slotsList"></div>
+      <button id="slotNew" class="primary full" style="margin-top:12px">✨ เริ่มเกมใหม่</button>
+    </div>
+  </div>
+</div>
+
+<script src="./app.js"></script>
+</body>
+</html>

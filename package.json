@@ -1,0 +1,13 @@
+{
+  "name": "tale-engine",
+  "version": "1.0.0",
+  "description": "Solo AI text-adventure PWA powered by Gemini",
+  "private": true,
+  "scripts": {
+    "test": "node test.mjs && node test-edge.mjs"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.0.0",
+    "jsdom": "^25.0.0"
+  }
+}
