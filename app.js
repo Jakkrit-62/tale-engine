@@ -22,11 +22,14 @@
   // runaway state can never lock the game (BUG #2 fix).
   const PROMPT_CHAR_BUDGET = 400000;
 
-  const DEFAULT_MODEL = "gemini-2.5-flash";
+  const DEFAULT_MODEL = "gemini-flash-latest";
   const MODELS = [
-    { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash (เร็ว/ประหยัด — แนะนำ)" },
-    { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite (เร็วที่สุด)" },
-    { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro (คุณภาพสูงสุด/ช้ากว่า)" },
+    { id: "gemini-flash-latest", label: "Gemini Flash (ล่าสุดเสมอ — แนะนำ)" },
+    { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash (เร็ว โครงเรื่องกระชับ)" },
+    { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash (เร็ว/ประหยัด)" },
+    { id: "gemini-pro-latest", label: "Gemini Pro (ล่าสุดเสมอ — ภาษาลึกซึ้ง)" },
+    { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview (คุณภาพสูงสุด)" },
+    { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro (ภาษาลึกซึ้ง/ช้ากว่า)" },
   ];
 
   // ============================================================
