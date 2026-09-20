@@ -109,7 +109,8 @@ sw.js           service worker (แคชเฉพาะตัวแอป)
 icons/          ไอคอน 192/512/maskable
 test.mjs        ชุดทดสอบหลัก 77 ข้อ
 test-edge.mjs   ชุดทดสอบ edge case 50 ข้อ
-test-study.mjs  ชุดทดสอบโหมดภาษา/การศึกษา/เสียงอ่าน 54 ข้อ
+test-study.mjs  ชุดทดสอบภาษา/การศึกษา/เสียงอ่าน/Auto Play 89 ข้อ
+.githooks/      pre-commit hook กันความลับหลุดเข้า commit
 ```
 
 รันเทสต์:
@@ -134,3 +135,27 @@ node test-study.mjs
 
 ถ้าเนื้อเรื่องยังหลุดบริบท ลองเพิ่ม `CTX_KEEP` เป็น 24-32
 (แลกกับค่า token ต่อเทิร์นที่สูงขึ้น)
+
+
+---
+
+## ความปลอดภัยของ repo
+
+repo นี้เป็น **public** และเผยแพร่ผ่าน GitHub Pages — ทุกไบต์ที่ commit แล้ว push
+จะเป็นสาธารณะถาวร (ลบ history ทีหลังก็ไม่ช่วย เพราะถูกดึงไปแล้ว)
+
+**API key ไม่เคยอยู่ในโค้ด** — เก็บใน IndexedDB ของเบราว์เซอร์เท่านั้น
+และมี pre-commit hook เป็นตาข่ายกันพลาดอีกชั้น
+
+หลังโคลนใหม่ ให้เปิด hook ด้วย (หรือรัน `npm install` แล้วมันตั้งให้เอง):
+
+```bash
+git config core.hooksPath .githooks
+```
+
+hook จะบล็อก commit ถ้าเจอ Gemini/GitHub/AWS/OpenAI key, private key,
+รหัสผ่าน hard-code หรือไฟล์อย่าง `.env` / `*.pem`
+ถ้าเป็น false positive จริงๆ ข้ามได้ด้วย `git commit --no-verify`
+
+ถ้าเผลอ push key ขึ้นไปแล้ว: **เพิกถอน key นั้นทันที**
+ที่ https://aistudio.google.com/apikey แล้วค่อยสร้างใหม่ — สำคัญกว่าการลบ commit
