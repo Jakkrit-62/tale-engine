@@ -93,8 +93,17 @@ header .icon-btn { background:none; border:none; font-size:22px; padding:4px 2px
 .savedot.ok { background:var(--ok); }
 .savedot.fail { background:var(--danger); }
 
+#logwrap { flex:1; min-height:0; position:relative; display:flex; }
 #log { flex:1; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:10px;
-  -webkit-overflow-scrolling:touch; }
+  -webkit-overflow-scrolling:touch; scroll-behavior:auto; }
+
+/* Jump-to-bottom pill: only shown once the reader has scrolled up and new
+   text has arrived below them. Auto-scroll stays off until they tap it. */
+#jumpBtn { position:absolute; left:50%; bottom:12px; transform:translateX(-50%) translateY(8px);
+  background:var(--accent); color:var(--accent-ink); border:none; border-radius:999px;
+  padding:8px 16px; font-size:13px; font-weight:600; box-shadow:0 4px 14px rgba(0,0,0,.25);
+  opacity:0; pointer-events:none; transition:.2s; z-index:5; }
+#jumpBtn.show { opacity:.97; pointer-events:auto; transform:translateX(-50%) translateY(0); }
 .msg { max-width:88%; padding:10px 13px; border-radius:14px; font-size:15px; line-height:1.6;
   box-shadow:var(--shadow); white-space:pre-wrap; word-wrap:break-word; }
 .msg.ai { align-self:flex-start; background:var(--bg-el); border:1px solid var(--border); border-bottom-left-radius:4px; }
@@ -217,3 +226,42 @@ mark.vw { background:none; color:inherit; border-bottom:2px dotted var(--accent)
   border-radius:999px; padding:4px 12px; font-size:12.5px; }
 .msgtools button.on { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
 .msg.ai.reading { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent); }
+
+
+/* ---------- Read-aloud highlighting ---------- */
+.msg.ai .sent { transition:background-color .18s, color .18s; border-radius:4px; }
+.msg.ai .sent.now { background:var(--accent); color:var(--accent-ink); box-shadow:0 0 0 3px var(--accent); }
+.msg.ai .sent.now mark.vw { color:inherit; border-bottom-color:currentColor; }
+@media (prefers-reduced-motion: reduce) { .msg.ai .sent { transition:none; } }
+
+.readnav { display:inline-flex; gap:4px; }
+.readnav button { background:var(--chip); border:1px solid var(--border); color:var(--ink);
+  border-radius:999px; padding:4px 10px; font-size:12.5px; line-height:1.2; }
+
+.raterow { display:flex; gap:8px; align-items:center; }
+.raterow input[type=range] { flex:1; accent-color:var(--accent); min-width:0; }
+.ratelbl { float:right; text-transform:none; letter-spacing:0; color:var(--accent); font-weight:700; }
+.bar-fill.realm { background:var(--accent); }
+
+/* ---------- Per-turn status panel ---------- */
+.msg.status { align-self:stretch; max-width:100%; background:var(--bg-el);
+  border:1px solid var(--border); border-left:4px solid var(--accent);
+  white-space:normal; font-size:13.5px; }
+.msg.status summary { cursor:pointer; font-weight:700; color:var(--accent); padding:2px 0; }
+.stdiff { margin-top:8px; display:flex; flex-direction:column; gap:3px; }
+.stdiff > div { padding:3px 8px; border-radius:6px; background:var(--chip); font-size:13px; }
+.stdiff .d-up { color:var(--ok); }
+.stdiff .d-down { color:var(--danger); }
+.stdiff .d-big { background:var(--accent); color:var(--accent-ink); font-weight:700; }
+.stgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:6px; margin-top:10px; }
+.stcell { background:var(--chip); border-radius:8px; padding:6px 9px; min-width:0; }
+.stcell .stl { display:block; font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.04em; }
+.stcell .stv { display:block; font-size:13.5px; word-wrap:break-word; }
+.stlist { margin-top:10px; }
+.stlh { font-size:12px; color:var(--dim); text-transform:uppercase; letter-spacing:.04em; margin-bottom:3px; }
+.stli { font-size:13px; line-height:1.5; }
+
+/* ---------- Auto Play ---------- */
+.autostop { background:var(--danger); color:#fff; border:none; border-radius:999px;
+  padding:6px 12px; font-size:12.5px; font-weight:600; flex-shrink:0; }
+.msg.ai.reading.live { border-style:dashed; }

@@ -4,7 +4,9 @@
   "description": "Solo AI text-adventure PWA powered by Gemini",
   "private": true,
   "scripts": {
-    "test": "node test.mjs && node test-edge.mjs && node test-study.mjs"
+    "prepare": "git config core.hooksPath .githooks",
+    "test": "node test.mjs && node test-edge.mjs && node test-study.mjs",
+    "secrets": "git diff --cached -U0 | grep -E 'AIza[0-9A-Za-z_-]{35}|gh[pousr]_[A-Za-z0-9]{36}|BEGIN [A-Z ]*PRIVATE KEY' || echo 'no secrets staged'"
   },
   "devDependencies": {
     "fake-indexeddb": "^6.0.0",

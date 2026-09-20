@@ -146,7 +146,7 @@
   // ============================================================
   // Gemini API
   // ============================================================
-  let settings = { apiKey: "", model: DEFAULT_MODEL, ttsRate: 0.85 };
+  let settings = { apiKey: "", model: DEFAULT_MODEL, ttsRate: 0.85, ttsPitch: 1, ttsFollow: true };
 
   function mapTurns(turns) {
     // Gemini wants role "user" | "model"; merge consecutive same-role turns.
@@ -412,9 +412,17 @@
       // exactly how the game behaved before these options existed.
       lang: "auto", length: "short", pov: "second",
       study: false, cefr: "B1", vocab: [],
+      // Novel craft knobs. Older saves default to "on" — this is the
+      // behaviour the player asked for and it never breaks an old story.
+      fx: true, showStatus: true, autoPlay: false,
       hp: 20, maxHp: 20, level: 1, xp: 0,
       skills: [], inventory: [],
       location: "", npcs: [], flags: [],
+      // Progression / living-world tracking. Every one of these is optional
+      // for the model to fill; empty means "the story hasn't used it yet".
+      realm: "", realmProgress: 0, worldTime: "",
+      titles: [], resources: [], quests: [], factions: [], rivals: [],
+      worldEvents: [],
       chapters: [],
       ctx: [],
       log: [],
@@ -429,15 +437,74 @@
     rpg: "โหมด RPG: เน้นระบบสกิล ไอเทม และการเติบโตของตัวละคร การกระทำที่สมเหตุสมผลมีโอกาสได้สกิลใหม่ ไอเทมใหม่ หรือ XP เพิ่ม",
     story: "โหมด Story: เน้นเนื้อเรื่องและอารมณ์ความรู้สึกเป็นหลัก ลดความซับซ้อนเชิงกลไก (สกิล/ไอเทม) ใช้เท่าที่จำเป็นต่อเนื้อเรื่อง",
     dnd: "โหมด D&D: ระบบจะทอย d20 ให้อัตโนมัติและส่งมาในรูปแบบ [Dice: d20=X] ให้ตีความว่า 1=ล้มเหลวหายนะ, 2-5=ล้มเหลว/มีผลเสีย, 6-10=สำเร็จแบบมีราคาต้องจ่าย, 11-15=สำเร็จตามปกติ, 16-19=สำเร็จดีเยี่ยม, 20=สำเร็จเกินคาด และอ้างถึงผลทอยในเนื้อเรื่องอย่างเป็นธรรมชาติ",
+    cultivation: "โหมดบ่มเพาะ (เซียน/ศิลปะการต่อสู้): ตัวเอกไต่ระดับ \"ฐานบ่มเพาะ\" เป็นขั้นๆ อย่างมีระบบ " +
+      "ทุกตอนต้องมีความคืบหน้าหรืออุปสรรคของการบ่มเพาะที่จับต้องได้ (ปริมาณพลัง ความบริสุทธิ์ของจิต อุปสรรคก่อนทะลวงขั้น) " +
+      "ให้โลกมีลำดับชั้นชัดเจน: สำนัก ตระกูล ผู้อาวุโส ศัตรูคู่แค้น และอัจฉริยะรุ่นเดียวกันที่ไต่ขั้นแข่งกับตัวเอก " +
+      "ทรัพยากร (หินวิญญาณ ยาบำรุง ตำราวิชา) มีจำกัดและต้องแลกมาด้วยอะไรบางอย่างเสมอ " +
+      "เวลาทะลวงขั้น ให้บรรยายเป็นฉากใหญ่ มีนิมิต ความเจ็บปวด และผลกระทบที่คนรอบข้างสังเกตเห็น",
   };
+  const MODE_LABELS = { rpg: "RPG", story: "Story", dnd: "D&D", cultivation: "บ่มเพาะ" };
 
   const LENGTH_RULES = {
-    short: "ครั้งละ 2-5 ย่อหน้าสั้น (ราว 150-250 คำ) กระชับ มีบรรยากาศ ไม่ยืดเยื้อ",
-    medium: "ครั้งละ 4-6 ย่อหน้า (ราว 350-500 คำ) มีทั้งการบรรยายฉาก บทสนทนา และความรู้สึกของตัวละคร",
-    long: "ครั้งละ 7-10 ย่อหน้า (ราว 700-1000 คำ) เขียนแบบนิยายเต็มรูปแบบ: บรรยายฉากผ่านประสาทสัมผัส มีบทสนทนาโต้ตอบ " +
+    short: "ครั้งละ 3-5 ย่อหน้า (ราว 200-300 คำ) กระชับแต่ยังมีบทสนทนาอย่างน้อย 1 ช่วง",
+    medium: "ครั้งละ 5-7 ย่อหน้า (ราว 400-550 คำ) มีทั้งการบรรยายฉาก บทสนทนาโต้ตอบ และความคิดภายในของตัวละคร",
+    long: "ครั้งละ 8-12 ย่อหน้า (ราว 800-1100 คำ) เขียนแบบนิยายเต็มรูปแบบ: บรรยายฉากผ่านประสาทสัมผัส บทสนทนายาวหลายรอบ " +
       "ความคิดภายในของตัวละคร และจังหวะที่ค่อยๆ ไต่ระดับความตึงเครียด ห้ามรีบสรุปเหตุการณ์",
   };
   const LENGTH_LABELS = { short: "สั้น", medium: "กลาง", long: "ยาว (นิยาย)" };
+
+  // The heart of "ให้มันเป็นนิยายจริงๆ": concrete craft rules, not vibes.
+  function craftRules() {
+    const r = [
+      "",
+      "วิธีเขียนให้เป็นนิยายจริง (สำคัญ — ห้ามข้าม):",
+      "- ห้ามเขียนเป็น \"รายงานสรุปเหตุการณ์\" ให้เขียนเป็นฉาก: มีสถานที่ เวลา แสง เสียง กลิ่น สัมผัส อุณหภูมิ อย่างน้อย 2 ประสาทสัมผัสต่อฉาก",
+      "- ทุกตอนที่มีคนอื่นอยู่ในฉาก ต้องมีบทสนทนาจริงอย่างน้อย 2-4 รอบโต้ตอบ เขียนคำพูดในเครื่องหมายคำพูด ขึ้นบรรทัดใหม่เมื่อเปลี่ยนผู้พูด",
+      "  ตัวอย่างรูปแบบ:\n    \"เจ้าจะไปไหน\" เสียงนั้นเย็นจนขนลุก\n    ตัวเอกไม่หันกลับ \"ที่ที่เจ้าตามไม่ทัน\"",
+      "- ให้ตัวละครแต่ละตัวมีน้ำเสียงเฉพาะตัว (คำติดปาก จังหวะการพูด ระดับความสุภาพ) คนละแบบกันชัดเจน ห้ามพูดเหมือนกันหมด",
+      "- แสดงอารมณ์ด้วยการกระทำและร่างกาย (มือสั่น กรามขบแน่น ลมหายใจสะดุด) มากกว่าบอกตรงๆ ว่า \"เขารู้สึกกลัว\"",
+      "- สลับความยาวประโยค ประโยคสั้นๆ ใช้ตอนกระแทกอารมณ์",
+      "- ใส่ความคิดภายในของตัวเอกอย่างน้อย 1 ช่วงต่อตอน",
+      "- ปิดตอนด้วยจังหวะที่ค้างคา (ประโยคเด็ด คำถาม เงาที่เพิ่งขยับ) ไม่ใช่ถามผู้เล่นตรงๆ ว่า \"คุณจะทำอะไรต่อ\"",
+    ];
+    if (!state || state.fx !== false) {
+      r.push(
+        "",
+        "ฉากต่อสู้/ฉากบู้ (เมื่อมีการปะทะ):",
+        "- แตกเป็นจังหวะสั้นๆ ทีละหมัด ทีละดาบ ห้ามสรุปรวบว่า \"ต่อสู้กันอย่างดุเดือดแล้วชนะ\"",
+        "- ใส่เอฟเฟคเสียงและแรงปะทะเป็นบรรทัดของตัวเอง เขียนตัวใหญ่/เน้นได้ เช่น\n    ปัง!\n    เสียงเหล็กกระทบเหล็กดังก้องทั้งลาน",
+        "- ทุกการโจมตีต้องมีราคา: เสียเลือด เสียท่า เสียพลัง หรือเสียตำแหน่งยืน",
+        "- ระบุผลกระทบต่อสิ่งแวดล้อม (พื้นแตก ฝุ่นฟุ้ง กิ่งไม้หัก) เพื่อให้เห็นระดับพลังจริง",
+        "- จบฉากบู้ด้วยสภาพร่างกายของตัวเอกอย่างชัดเจน แล้วอัปเดต HP ให้ตรงกับที่บรรยาย"
+      );
+    }
+    r.push(
+      "",
+      "โลกที่ยังหายใจอยู่ (สำคัญ — ผู้เล่นไม่ควรต้องถามเอง):",
+      "- ทุกตอนต้องมีสัญญาณอย่างน้อย 1 อย่างว่าคนอื่นและโลกกำลังเคลื่อนไหวอยู่ แม้ตัวเอกไม่อยู่ตรงนั้น " +
+      "(ข่าวลือในโรงเตี๊ยม ป้ายประกาศ นกสื่อสาร คนเดินผ่านคุยกัน ศัตรูที่ไต่ขั้นไปแล้ว สงครามที่ขยับ)",
+      "- คู่แข่ง/ศัตรู/พันธมิตร ต้องเติบโตและลงมือทำอะไรของตัวเองระหว่างที่ตัวเอกไม่อยู่ ไม่ใช่รออยู่เฉยๆ",
+      "- เมื่อสถานะของตัวเอกเปลี่ยน (เลเวล ฐานบ่มเพาะ ไอเทมสำคัญ บาดแผล) ต้องบรรยายให้เห็นในเนื้อเรื่องด้วย ไม่ใช่เปลี่ยนแค่ใน JSON",
+      "- เวลาในโลกต้องเดิน ระบุช่วงเวลา/วัน/ฤดู ใน worldTime และอ้างถึงในเนื้อเรื่องเป็นระยะ"
+    );
+    if (state && state.autoPlay) {
+      r.push(
+        "",
+        "โหมด Auto Play (Hardcore) — เปิดอยู่:",
+        "- เน้นความท้าทายระดับสูงสุด ศัตรูต้องฉลาด มีการวางแผนและตลบหลัง",
+        "- สถานการณ์ต้องบีบให้แก้ปัญหาเฉพาะหน้า (เช่น พิษ, กับดัก, เวลาจำกัด)",
+        "- ตัวเอกต้องค่อยๆ เก่งขึ้นอย่างสมเหตุสมผล ห้ามได้พลังก้าวกระโดดแบบง่ายๆ",
+        "- ชัยชนะทุกครั้งต้องมีราคา และความผิดพลาดต้องมีผลตามมาจริงในตอนถัดไป",
+        "",
+        "การจบตอนในโหมดออโต้ (แทนที่กฎการจบตอนด้านบน):",
+        "- ห้ามจบด้วยคำถามปลายเปิดแบบ \"คุณจะทำอะไรต่อ\" และห้ามถามผู้เล่นทุกกรณี",
+        "- ให้คุณเป็นคนตัดสินใจเนื้อเรื่องต่อเอง เพื่อให้เนื้อเรื่องไหลลื่นและสมเหตุสมผล " +
+        "อย่างกับนักเขียนนิยายมืออาชีพของจีน",
+        "- ปิดตอนด้วยจังหวะคลิฟแฮงเกอร์ที่พาเข้าสู่ฉากถัดไปโดยตรง"
+      );
+    }
+    return r;
+  }
 
   const CEFR_RULES = {
     A2: "A2 (elementary): short, simple sentences; common everyday words; mostly past simple; avoid idioms",
@@ -499,16 +566,34 @@
       "- ความยาว: " + (LENGTH_RULES[state.length] || LENGTH_RULES.short),
       ...languageRules(),
       "- " + (MODE_RULES[state.mode] || MODE_RULES.rpg),
-      "- จบทุกครั้งด้วยสถานการณ์ที่ผู้เล่นต้องตัดสินใจต่อ ห้ามเล่าแทนหรือเดาการกระทำของผู้เล่นเอง",
+      (state.autoPlay
+        ? "- โหมดออโต้เปิดอยู่: ห้ามหยุดรอผู้เล่น ให้เล่าต่อเนื่องและตัดสินใจแทนตัวเอกเองอย่างสมเหตุสมผล"
+        : "- จบทุกครั้งด้วยสถานการณ์ที่ผู้เล่นต้องตัดสินใจต่อ ห้ามเล่าแทนหรือเดาการกระทำของผู้เล่นเอง"),
       "- คุณจะได้รับบทสรุปเนื้อเรื่องเก่า (ความจำระยะยาว) และสถานะโลก/ตัวละครล่าสุด ต้องยึดข้อมูลเหล่านี้เป็นความจริง ห้ามขัดแย้ง",
       "- HP ห้ามต่ำกว่า 0 หรือเกิน maxHp ถ้า HP ถึง 0 ให้บรรยายภาวะวิกฤต/หมดสติ/ต้องพักฟื้น แต่ห้ามจบเกม (ไม่มี permadeath)",
+      ...craftRules(),
       "",
       "รูปแบบคำตอบ (สำคัญมาก):",
       "- เล่าเรื่องก่อน จากนั้นขึ้นบรรทัดใหม่แล้วพิมพ์ <<STATE>> ตามด้วย JSON บรรทัดเดียว ห้ามใส่ markdown fence",
-      '- JSON ต้องมีคีย์ครบเสมอ: {"hp":number,"maxHp":number,"level":number,"xp":number,"skills":string[],"inventory":string[],"location":string,"npcs":string[],"flags":string[]}',
-      '- npcs: ตัวละครสำคัญที่เจอแล้ว รูปแบบ "ชื่อ — ความสัมพันธ์/สถานะล่าสุด" อัปเดตทับของเดิม ไม่ซ้ำรายการ',
+      "- JSON ต้องมีคีย์ครบเสมอ:",
+      '  {"hp":number,"maxHp":number,"level":number,"xp":number,"realm":string,"realmProgress":number,' +
+      '"worldTime":string,"skills":string[],"inventory":string[],"resources":string[],"titles":string[],' +
+      '"location":string,"npcs":string[],"factions":string[],"rivals":string[],"quests":string[],' +
+      '"worldEvents":string[],"flags":string[]}',
+      "",
+      "ความหมายของแต่ละฟิลด์ — ต้องอัปเดตทุกเทิร์นโดยไม่ต้องรอให้ผู้เล่นถาม:",
+      '- realm: ฐานบ่มเพาะ/ขั้นพลังปัจจุบันของตัวเอก เช่น "หลอมพลัง ชั้น 3" หรือ "อัศวินฝึกหัด ขั้นต้น" (ถ้าโลกนี้ไม่มีระบบขั้น ให้ใส่ระดับฝีมือแทน)',
+      "- realmProgress: ความคืบหน้าสู่ขั้นถัดไป 0-100 ต้องขยับตามเนื้อเรื่องจริง",
+      '- worldTime: เวลาในโลก เช่น "เช้าวันที่ 3 ของฤดูใบไม้ร่วง"',
+      '- resources: ทรัพยากรที่นับได้ รูปแบบ "ชื่อ: จำนวน" เช่น "หินวิญญาณ: 12", "เหรียญเงิน: 40"',
+      "- titles: ฉายา/ตำแหน่ง/สังกัดที่ตัวเอกได้มา",
+      '- npcs: ตัวละครสำคัญที่เจอแล้ว รูปแบบ "ชื่อ — ระดับพลัง/ตำแหน่ง — ความสัมพันธ์กับเรา — กำลังทำอะไรอยู่" อัปเดตทับของเดิม ไม่ซ้ำรายการ',
+      '- factions: สำนัก/ตระกูล/องค์กร รูปแบบ "ชื่อ — ท่าทีต่อเรา — ความเคลื่อนไหวล่าสุด"',
+      '- rivals: คู่แข่ง/ศัตรูที่กำลังไต่ขั้นแข่งกับเรา รูปแบบ "ชื่อ — ระดับพลังของเขา — เขาคืบหน้าไปถึงไหน" ต้องเติบโตขึ้นเรื่อยๆ แม้ตัวเอกไม่ได้เจอ',
+      '- quests: เป้าหมาย/ภารกิจที่ยังค้าง รูปแบบ "สิ่งที่ต้องทำ — เดดไลน์/อุปสรรค"',
+      '- worldEvents: 2-4 รายการ สิ่งที่โลกภายนอกกำลังทำอยู่ตอนนี้ (สงคราม ข่าวลือ การประลอง ภัยพิบัติ) รูปแบบ "เหตุการณ์ — สถานะล่าสุด" อัปเดตให้ขยับทุก 2-3 เทิร์น ห้ามซ้ำเดิมตลอด',
       "- flags: เหตุการณ์/การตัดสินใจที่ยังมีผลต่อเนื้อเรื่อง สั้นๆ ไม่เกิน 15 รายการ ตัดที่หมดความสำคัญออกได้",
-      "- ต้องส่งค่าปัจจุบันครบทุกฟิลด์เสมอ แม้ไม่มีอะไรเปลี่ยน",
+      "- ต้องส่งค่าปัจจุบันครบทุกฟิลด์เสมอ แม้ไม่มีอะไรเปลี่ยน (ฟิลด์ที่ยังไม่มีข้อมูล ใส่ \"\" หรือ [] ได้)",
       "- ห้ามพิมพ์อะไรต่อหลัง JSON",
       "- ห้ามตอบว่างเปล่า ต้องมีเนื้อเรื่องก่อน <<STATE>> เสมอ",
       ...studyRules(),
@@ -521,8 +606,32 @@
       world: state.world || "(ไม่ระบุ — สร้างสรรค์ได้เอง)",
       mode: state.mode,
       hp: state.hp, maxHp: state.maxHp, level: state.level, xp: state.xp,
+      realm: state.realm || "", realmProgress: state.realmProgress || 0,
+      worldTime: state.worldTime || "",
       skills: state.skills, inventory: state.inventory,
-      location: state.location, npcs: state.npcs, flags: state.flags,
+      resources: state.resources || [], titles: state.titles || [],
+      location: state.location,
+      npcs: state.npcs, factions: state.factions || [], rivals: state.rivals || [],
+      quests: state.quests || [], worldEvents: state.worldEvents || [],
+      flags: state.flags,
+    };
+  }
+
+  // Fields worth showing the player as a "what changed" panel each turn.
+  function statusSnapshot() {
+    return {
+      hp: state.hp, maxHp: state.maxHp, level: state.level, xp: state.xp,
+      realm: state.realm || "", realmProgress: state.realmProgress || 0,
+      worldTime: state.worldTime || "", location: state.location || "",
+      skills: (state.skills || []).slice(),
+      inventory: (state.inventory || []).slice(),
+      resources: (state.resources || []).slice(),
+      titles: (state.titles || []).slice(),
+      npcs: (state.npcs || []).slice(),
+      factions: (state.factions || []).slice(),
+      rivals: (state.rivals || []).slice(),
+      quests: (state.quests || []).slice(),
+      worldEvents: (state.worldEvents || []).slice(),
     };
   }
 
@@ -586,11 +695,23 @@
       diceEl = renderDice(roll);
     }
 
+    cancelAuto();   // a turn is starting; any pending auto tick is redundant
+
     const bubble = document.createElement("div");
     bubble.className = "msg ai streaming";
     bubble.textContent = "…";
     $("log").appendChild(bubble);
-    scrollLog();
+
+    // In auto-play the tool row is created up front so the live reader has a
+    // button to drive, and the voice can start on the first finished sentence
+    // instead of waiting for the whole turn to land.
+    let toolsRow = null, live = null;
+    if (state.autoPlay && ttsSupported()) {
+      toolsRow = aiTools(bubble, "");
+      $("log").appendChild(toolsRow);
+      live = startLiveRead(bubble, toolsRow.querySelector("button"));
+    }
+    scrollLog(true);
 
     currentAbort = new AbortController();
     let ok = false;
@@ -611,7 +732,9 @@
         },
         onText: (t) => {
           // hide the machine blocks (and a half-streamed "<<STU…" marker)
-          bubble.textContent = t.split(/<<(?:STATE|STUDY)>>/)[0].replace(/<<[A-Z]*>?$/, "");
+          const vis = t.split(/<<(?:STATE|STUDY)>>/)[0].replace(/<<[A-Z]*>?$/, "");
+          if (reading === live && live) feedLive(live, vis, false);
+          else bubble.textContent = vis;
           scrollLog();
         },
       });
@@ -625,11 +748,27 @@
       const study = studyOn() ? parseStudy(reply.study) : null;
 
       bubble.classList.remove("streaming");
+      const stillLive = (live && reading === live) ? live : null;
       fillNarrative(bubble, narrative, study);
-      $("log").appendChild(aiTools(bubble, narrative));
+      if (toolsRow) {
+        // reuse the row created for the live reader; rebind it to the final text
+        const b = toolsRow.querySelector("button");
+        if (b) b.onclick = () => readAloud(bubble, narrative, b);
+      } else {
+        $("log").appendChild(aiTools(bubble, narrative));
+      }
+      // hand the reader the last sentence it was holding back, and close the queue
+      if (stillLive) feedLive(stillLive, narrative, true, true);
       if (study) $("log").appendChild(renderStudyCard(study));
 
+      const before = statusSnapshot();
       if (reply.state) applyStatePatch(reply.state);
+      const after = statusSnapshot();
+      const diff = opts.isOpening ? [] : statusDiff(before, after);
+      if (state.showStatus !== false) {
+        const card = renderStatusCard(after, diff);
+        if (card) $("log").appendChild(card);
+      }
 
       // BUG #4 fix: the player's turn is committed to memory only here,
       // after a confirmed good reply. A failed turn leaves nothing behind.
@@ -637,11 +776,16 @@
       state.ctx.push({ role: "assistant", content: narrative });
       if (opts.isOpening) {
         pushLog("sys", "✨ เริ่มการผจญภัย");
+      } else if (opts.isAuto) {
+        // the player typed nothing — don't fake a user turn in the transcript
+        if (roll !== null) pushLog("dice", "🎲 d20 = " + roll);
       } else {
         if (roll !== null) pushLog("dice", "🎲 d20 = " + roll);
         pushLog("user", rawAction);
       }
-      const aiEntry = pushLog("assistant", narrative, study ? { study } : null);
+      const meta = { status: after, diff };
+      if (study) meta.study = study;
+      const aiEntry = pushLog("assistant", narrative, meta);
       if (study) addToNotebook(study.vocab, aiEntry.t);
       state.lastAction = opts.isOpening ? null : rawAction;
       ok = true;
@@ -651,6 +795,8 @@
       await persist(true);
       await maybeCompress();
     } catch (e) {
+      if (live && reading === live) stopReading();
+      if (toolsRow) toolsRow.remove();
       bubble.remove();
       if (diceEl) diceEl.remove();
       if (e && e.code === "aborted") {
@@ -664,6 +810,10 @@
       setBusyUI(false);
       scrollLog();
       renderDrawer();
+      // When a reader is running, the *end of the read* chains the next turn.
+      // Without one (no speech support, or it stopped early), chain from here
+      // so auto-play still works as a plain text crawl.
+      if (ok && state && state.autoPlay && !(reading && reading.bubble === bubble)) scheduleAuto();
     }
     return ok;
   }
@@ -747,12 +897,67 @@
     state.hp = Math.max(0, Math.min(state.maxHp, n(p.hp, state.hp)));
     state.level = Math.max(1, n(p.level, state.level));
     state.xp = Math.max(0, n(p.xp, state.xp));
+    state.realmProgress = Math.max(0, Math.min(100, n(p.realmProgress, state.realmProgress || 0)));
     const strArr = (v) => Array.isArray(v) ? v.map(x => String(x)).filter(Boolean).slice(0, 40) : null;
     const sk = strArr(p.skills); if (sk) state.skills = sk;
     const iv = strArr(p.inventory); if (iv) state.inventory = iv;
     const np = strArr(p.npcs); if (np) state.npcs = np;
     const fl = strArr(p.flags); if (fl) state.flags = fl.slice(0, 20);
+    const rs = strArr(p.resources); if (rs) state.resources = rs.slice(0, 20);
+    const ti = strArr(p.titles); if (ti) state.titles = ti.slice(0, 12);
+    const fa = strArr(p.factions); if (fa) state.factions = fa.slice(0, 15);
+    const rv = strArr(p.rivals); if (rv) state.rivals = rv.slice(0, 15);
+    const qs = strArr(p.quests); if (qs) state.quests = qs.slice(0, 15);
+    const we = strArr(p.worldEvents); if (we) state.worldEvents = we.slice(0, 8);
     if (typeof p.location === "string") state.location = p.location;
+    if (typeof p.realm === "string" && p.realm.trim()) state.realm = p.realm.trim().slice(0, 80);
+    if (typeof p.worldTime === "string" && p.worldTime.trim()) state.worldTime = p.worldTime.trim().slice(0, 80);
+  }
+
+  // ---------- Status diff ----------
+  // What changed between two snapshots, in the player's language. This is the
+  // "ไม่ต้องถามก็รู้" panel: level-ups, realm breakthroughs, new items, and
+  // what the world did while the player was busy.
+  function statusDiff(before, after) {
+    if (!before) return [];
+    const out = [];
+    const num = (label, key, fmt) => {
+      if (before[key] === after[key]) return;
+      out.push({ kind: after[key] > before[key] ? "up" : "down",
+        text: label + " " + (fmt ? fmt(before[key]) : before[key]) + " → " + (fmt ? fmt(after[key]) : after[key]) });
+    };
+    if (before.realm !== after.realm && after.realm) {
+      out.push({ kind: "big", text: "🌀 ฐานบ่มเพาะ: " + (before.realm || "—") + " → " + after.realm });
+    }
+    num("⬆️ Level", "level");
+    num("❤️ HP", "hp");
+    if (before.maxHp !== after.maxHp) out.push({ kind: "up", text: "❤️ HP สูงสุด " + before.maxHp + " → " + after.maxHp });
+    num("✨ XP", "xp");
+    if (before.realm === after.realm && before.realmProgress !== after.realmProgress) {
+      out.push({ kind: after.realmProgress > before.realmProgress ? "up" : "down",
+        text: "🌀 ความคืบหน้าขั้นถัดไป " + before.realmProgress + "% → " + after.realmProgress + "%" });
+    }
+    if (before.location !== after.location && after.location) out.push({ kind: "info", text: "📍 " + after.location });
+    const listDiff = (label, key, icon) => {
+      const b = new Set(before[key] || []);
+      const a = new Set(after[key] || []);
+      for (const v of a) if (!b.has(v)) out.push({ kind: "up", text: icon + " ได้" + label + ": " + v });
+      for (const v of b) if (!a.has(v)) out.push({ kind: "down", text: icon + " เสีย" + label + ": " + v });
+    };
+    listDiff("สกิล", "skills", "🔮");
+    listDiff("ไอเทม", "inventory", "🎒");
+    listDiff("ฉายา", "titles", "🏅");
+    const changed = (key, label, icon) => {
+      const b = new Set(before[key] || []);
+      for (const v of (after[key] || [])) if (!b.has(v)) out.push({ kind: "info", text: icon + " " + label + ": " + v });
+    };
+    changed("resources", "ทรัพยากร", "💰");
+    changed("quests", "ภารกิจ", "🎯");
+    changed("rivals", "คู่แข่ง", "⚔️");
+    changed("factions", "ฝ่าย", "🏯");
+    changed("npcs", "ตัวละคร", "👤");
+    changed("worldEvents", "โลกภายนอก", "🌍");
+    return out;
   }
 
   // ============================================================
@@ -843,9 +1048,49 @@
   // ============================================================
   // Rendering
   // ============================================================
-  function scrollLog() {
+  // ---------- Scroll follow ----------
+  // The log only snaps to the bottom while the player is already sitting at
+  // the bottom. The moment they scroll up — to read while a turn streams in —
+  // auto-scroll stops and a "↓ ข้อความใหม่" pill appears instead.
+  let followBottom = true;
+  let pendingBelow = false;
+
+  function atBottom(slack) {
     const l = $("log");
+    return (l.scrollHeight - l.scrollTop - l.clientHeight) <= (slack || 80);
+  }
+  function updateJumpPill() {
+    const p = $("jumpBtn");
+    if (!p) return;
+    // while a read is driving the scroll, the pill would flash on every
+    // streamed token — the reader is already showing the player where they are
+    const show = !followBottom && pendingBelow && !(reading && reading.live);
+    p.classList.toggle("show", show);
+  }
+  function scrollLog(force) {
+    const l = $("log");
+    if (force) {
+      followBottom = true;
+      pendingBelow = false;
+      l.scrollTop = l.scrollHeight;
+      updateJumpPill();
+      return;
+    }
+    if (!followBottom) { pendingBelow = true; updateJumpPill(); return; }
     l.scrollTop = l.scrollHeight;
+  }
+  function bindScrollFollow() {
+    const l = $("log");
+    l.addEventListener("scroll", () => {
+      const now = atBottom();
+      if (now !== followBottom) {
+        followBottom = now;
+        if (now) pendingBelow = false;
+        updateJumpPill();
+      }
+    }, { passive: true });
+    const j = $("jumpBtn");
+    if (j) j.onclick = () => scrollLog(true);
   }
   function renderSys(text) {
     const el = document.createElement("div");
@@ -870,40 +1115,107 @@
     const el = document.createElement("div");
     el.className = "msg user";
     el.textContent = text;
-    $("log").appendChild(el); scrollLog();
+    $("log").appendChild(el); scrollLog(true);
     return el;
   }
 
   // ---------- Study mode rendering ----------
   const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-  // Story text with each vocab word marked (first occurrence only). The
-  // text is escaped first and marks are inserted only between tags.
+  // ---------- Sentence segmentation ----------
+  // Splits narrative into sentence-sized pieces whose concatenation is
+  // byte-for-byte the original text. Latin prose splits on . ! ? …; Thai
+  // rarely uses them, so over-long pieces fall back to splitting on spaces.
+  const SENT_END = /[.!?…。！？]/;
+  const SENT_TAIL = /[.!?…。！？"”’')\]]/;
+  const SENT_MAX = 170;   // a piece longer than this gets split on spaces
+  const SENT_AIM = 110;   // …aiming for roughly this length
+
+  function splitLongPiece(s) {
+    const out = [];
+    while (s.length > SENT_MAX) {
+      let cut = s.lastIndexOf(" ", SENT_AIM);
+      if (cut < 40) cut = s.indexOf(" ", SENT_AIM);
+      if (cut < 0 || cut > SENT_MAX) cut = SENT_AIM;
+      out.push(s.slice(0, cut + 1));
+      s = s.slice(cut + 1);
+    }
+    if (s) out.push(s);
+    return out;
+  }
+
+  function segmentSentences(text) {
+    const raw = [];
+    let cur = "";
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      cur += c;
+      if (c === "\n") { raw.push(cur); cur = ""; continue; }
+      if (!SENT_END.test(c)) continue;
+      let j = i + 1;
+      while (j < text.length && SENT_TAIL.test(text[j])) { cur += text[j]; j++; }
+      i = j - 1;
+      if (j < text.length && !/\s/.test(text[j])) continue;
+      while (j < text.length && text[j] === " ") { cur += text[j]; j++; i = j - 1; }
+      raw.push(cur); cur = "";
+    }
+    if (cur) raw.push(cur);
+    const out = [];
+    for (const p of raw) {
+      if (p.length > SENT_MAX) out.push.apply(out, splitLongPiece(p));
+      else out.push(p);
+    }
+    return out.length ? out : [text];
+  }
+
+  // Story text as sentence spans (for read-aloud highlighting), with each
+  // vocab word marked inside its own sentence (first occurrence only).
   function fillNarrative(el, text, study) {
-    if (!study || !study.vocab.length) { el.textContent = text; return; }
-    let parts = [esc(text)];
-    study.vocab.forEach((v, i) => {
-      const re = new RegExp("(^|[^A-Za-z'])(" + reEsc(esc(v.word)) + ")(?![A-Za-z])", "i");
-      for (let k = 0; k < parts.length; k += 2) {
-        const hit = re.exec(parts[k]);
-        if (!hit) continue;
-        const at = hit.index + hit[1].length;
-        const seg = parts[k];
-        parts.splice(k, 1,
-          seg.slice(0, at),
-          '<mark class="vw" data-i="' + i + '">' + hit[2] + "</mark>",
-          seg.slice(at + hit[2].length));
-        break;
-      }
-    });
-    el.innerHTML = parts.join("");
+    const sents = segmentSentences(text);
+    const parts = sents.map(s => [esc(s)]);   // each sentence: odd slots = marks
+    if (study && study.vocab.length) {
+      study.vocab.forEach((v, i) => {
+        const re = new RegExp("(^|[^A-Za-z'])(" + reEsc(esc(v.word)) + ")(?![A-Za-z])", "i");
+        let done = false;
+        for (let p = 0; p < parts.length && !done; p++) {
+          const seg = parts[p];
+          for (let k = 0; k < seg.length; k += 2) {
+            const hit = re.exec(seg[k]);
+            if (!hit) continue;
+            const at = hit.index + hit[1].length;
+            const s = seg[k];
+            seg.splice(k, 1,
+              s.slice(0, at),
+              '<mark class="vw" data-i="' + i + '">' + hit[2] + "</mark>",
+              s.slice(at + hit[2].length));
+            done = true;
+            break;
+          }
+        }
+      });
+    }
+    el.innerHTML = parts
+      .map((seg, i) => '<span class="sent" data-si="' + i + '">' + seg.join("") + "</span>")
+      .join("");
     el._study = study;
   }
 
   // ---------- Read aloud (browser speech synthesis, no API quota) ----------
   const ttsSupported = () => !!(window.speechSynthesis && typeof window.SpeechSynthesisUtterance === "function");
-  const TTS_RATES = { "0.7": "ช้า", "0.85": "ค่อนข้างช้า", "1": "ปกติ", "1.15": "เร็ว" };
-  let reading = null; // { btn, bubble, chunks, i }
+  const TTS_MIN = 0.4, TTS_MAX = 2.5, TTS_STEP = 0.05;
+  const clampRate = (v) => {
+    const n = parseFloat(v);
+    if (!isFinite(n)) return 0.85;
+    const snapped = Math.round(Math.round(n / TTS_STEP) * TTS_STEP * 100) / 100;
+    return Math.min(TTS_MAX, Math.max(TTS_MIN, snapped));
+  };
+  function rateLabel(r) {
+    const s = r.toFixed(2).replace(/0$/, "").replace(/\.$/, "");
+    const word = r <= 0.6 ? "ช้ามาก" : r <= 0.8 ? "ช้า" : r < 0.95 ? "ค่อนข้างช้า"
+      : r <= 1.05 ? "ปกติ" : r <= 1.3 ? "เร็วขึ้น" : r <= 1.7 ? "เร็ว" : "เร็วมาก";
+    return "×" + s + " · " + word;
+  }
+  let reading = null; // { btn, bubble, spans, chunks, i, lang, voice }
 
   const isThai = (text) => (text.match(/[฀-๿]/g) || []).length > text.length * 0.2;
 
@@ -915,67 +1227,281 @@
       same.find(v => v.lang === lang) || same[0] || null;
   }
 
-  // Short chunks: long single utterances get cut off on Chrome (~15 s).
-  function chunkForSpeech(text) {
-    const pieces = [];
-    for (const para of text.split(/\n+/)) {
-      const sentences = para.match(/[^.!?…]+(?:[.!?…]+["”’)]*|$)\s*/g) || [para];
-      for (let s of sentences) {
-        s = s.trim();
-        while (s.length > 240) {
-          let cut = s.lastIndexOf(" ", 220);
-          if (cut < 80) cut = 220;
-          pieces.push(s.slice(0, cut).trim());
-          s = s.slice(cut).trim();
-        }
-        if (s) pieces.push(s);
+  // Speech plan: one chunk per on-screen sentence span, so the highlight and
+  // the voice stay in lockstep. Over-long sentences become several chunks that
+  // all point back at the same span. Chrome cuts utterances off around 15 s,
+  // which is why nothing longer than ~240 chars is ever sent at once.
+  function speechPlan(bubble, text) {
+    const spans = Array.prototype.slice.call(bubble.querySelectorAll(".sent"));
+    const chunks = [];
+    if (!spans.length) {
+      for (const s of segmentSentences(text)) {
+        const t = s.trim();
+        if (t) chunks.push({ text: t, si: -1 });
       }
+      return { spans: [], chunks };
     }
-    const out = [];
-    for (const p of pieces) {
-      if (out.length && out[out.length - 1].length + p.length < 200) out[out.length - 1] += " " + p;
-      else out.push(p);
-    }
-    return out;
+    spans.forEach((sp, si) => {
+      let s = (sp.textContent || "").trim();
+      if (!s) return;
+      while (s.length > 240) {
+        let cut = s.lastIndexOf(" ", 220);
+        if (cut < 80) cut = 220;
+        chunks.push({ text: s.slice(0, cut).trim(), si });
+        s = s.slice(cut).trim();
+      }
+      if (s) chunks.push({ text: s, si });
+    });
+    return { spans, chunks };
   }
 
-  function stopReading() {
+  function clearHighlight(r) {
+    if (r && r.spans) r.spans.forEach(sp => sp.classList.remove("now"));
+  }
+
+  // Slide the log so the sentence being read sits in the upper third —
+  // the "สไลด์จอควบคู่ขนานไปกับประโยคที่อ่าน" part.
+  function followSentence(sp) {
+    if (!settings.ttsFollow) return;
+    const l = $("log");
+    const lr = l.getBoundingClientRect();
+    const sr = sp.getBoundingClientRect();
+    const target = l.scrollTop + (sr.top - lr.top) - l.clientHeight * 0.35;
+    const max = l.scrollHeight - l.clientHeight;
+    const top = Math.max(0, Math.min(max, target));
+    if (Math.abs(top - l.scrollTop) < 8) return;
+    try { l.scrollTo({ top, behavior: "smooth" }); } catch (e) { l.scrollTop = top; }
+    followBottom = atBottom();
+    updateJumpPill();
+  }
+
+  // A read session ends one of three ways: the player stops it, a new one
+  // replaces it, or it runs out of chunks. Only the last one is "finished"
+  // and therefore allowed to chain into the next auto-play turn.
+  function stopReading(opts) {
     if (!reading) return;
     const r = reading;
     reading = null;
+    clearHighlight(r);
     r.btn.textContent = "🔊 ฟังตอนนี้";
     r.btn.classList.remove("on");
     r.bubble.classList.remove("reading");
+    if (r.nav) r.nav.remove();
     if (ttsSupported()) window.speechSynthesis.cancel();
+    updateJumpPill();
+    // a pending auto tick belongs to the read that just died
+    cancelAuto(opts && opts.userStop ? { off: true } : null);
+  }
+
+  function finishReading(r) {
+    const chain = !!(state && state.autoPlay);
+    stopReading();
+    if (chain) scheduleAuto();
+  }
+
+  // Speak the chunk at r.i, then the next, and so on. A *live* session can
+  // run dry while the model is still streaming: it parks in "waiting" and
+  // feedLive() wakes it up as soon as another sentence lands.
+  function speakStep(r) {
+    if (reading !== r) return;
+    if (r.i >= r.chunks.length) {
+      if (r.open) {
+        r.waiting = true;
+        r.btn.textContent = "⏳ กำลังเขียนต่อ…";
+        return;
+      }
+      finishReading(r);
+      return;
+    }
+    r.waiting = false;
+    if (!r.lang) {
+      r.lang = isThai(r.text || r.chunks[r.i].text) ? "th-TH" : "en-US";
+      r.voice = pickVoice(r.lang);
+    }
+    const c = r.chunks[r.i];
+    clearHighlight(r);
+    if (c.si >= 0 && r.spans[c.si]) {
+      r.spans[c.si].classList.add("now");
+      followSentence(r.spans[c.si]);
+    }
+    r.btn.textContent = "⏹ หยุด (" + (r.i + 1) + "/" + r.chunks.length + (r.open ? "+" : "") + ")";
+    const u = new window.SpeechSynthesisUtterance(c.text);
+    u.lang = r.lang;
+    u.rate = settings.ttsRate;
+    u.pitch = settings.ttsPitch;
+    if (r.voice) u.voice = r.voice;
+    u.onend = () => { if (reading === r) { r.i++; speakStep(r); } };
+    u.onerror = (e) => {
+      if (reading !== r) return;
+      if (e && (e.error === "interrupted" || e.error === "canceled")) return;
+      stopReading(); toast("อ่านออกเสียงไม่สำเร็จ");
+    };
+    window.speechSynthesis.speak(u);
+  }
+
+  // Speak from chunk index `at`. Restarting mid-read is how a rate change or
+  // a ⏮/⏭ tap takes effect immediately instead of at the next sentence.
+  function playFrom(r, at) {
+    if (reading !== r) return;
+    r.i = Math.max(0, Math.min(r.chunks.length, at));
+    window.speechSynthesis.cancel();
+    speakStep(r);
+  }
+
+  // Rate changed mid-read: re-speak the current sentence at the new speed.
+  function applyLiveRate() {
+    if (reading && !reading.waiting) playFrom(reading, reading.i);
+  }
+
+  function jumpSentence(delta) {
+    if (!reading || !reading.chunks.length) return;
+    const r = reading;
+    const curSi = r.chunks[Math.min(r.i, r.chunks.length - 1)].si;
+    let at = r.i + (delta > 0 ? 1 : -1);
+    // step to the first chunk of a *different* sentence
+    while (at > 0 && at < r.chunks.length && r.chunks[at].si === curSi) at += (delta > 0 ? 1 : -1);
+    while (at > 0 && r.chunks[at - 1] && r.chunks[at - 1].si === r.chunks[at].si) at--;
+    if (at >= r.chunks.length) {
+      if (r.open) { r.i = r.chunks.length; r.waiting = true; return; }
+      finishReading(r); return;
+    }
+    playFrom(r, Math.max(0, at));
+  }
+
+  // The ⏮ ⏭ 🐢 🐇 strip that sits beside 🔊 only while a bubble is being read.
+  function makeReadNav() {
+    const nav = document.createElement("span");
+    nav.className = "readnav";
+    const mk = (label, title, fn) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = label; b.title = title;
+      b.onclick = fn;
+      nav.appendChild(b);
+    };
+    mk("⏮", "ประโยคก่อนหน้า", () => jumpSentence(-1));
+    mk("⏭", "ประโยคถัดไป", () => jumpSentence(1));
+    mk("🐢", "ช้าลง", () => nudgeRate(-0.1));
+    mk("🐇", "เร็วขึ้น", () => nudgeRate(0.1));
+    return nav;
+  }
+
+  function beginSession(r) {
+    reading = r;
+    r.btn.classList.add("on");
+    r.bubble.classList.add("reading");
+    r.nav = makeReadNav();
+    r.btn.parentNode.appendChild(r.nav);
   }
 
   function readAloud(bubble, text, btn) {
-    if (reading && reading.btn === btn) { stopReading(); return; }
+    if (reading && reading.btn === btn) { stopReading({ userStop: true }); return; }
     stopReading();
     const lang = isThai(text) ? "th-TH" : "en-US";
     const voice = pickVoice(lang);
     if (lang === "th-TH" && !voice) toast("เครื่องนี้อาจไม่มีเสียงภาษาไทย — ลองติดตั้งในการตั้งค่า Text-to-speech ของเครื่อง", 4000);
-    const r = { btn, bubble, chunks: chunkForSpeech(text), i: 0 };
-    reading = r;
-    btn.classList.add("on");
-    bubble.classList.add("reading");
-    const next = () => {
-      if (reading !== r) return;
-      if (r.i >= r.chunks.length) { stopReading(); return; }
-      btn.textContent = "⏹ หยุด (" + (r.i + 1) + "/" + r.chunks.length + ")";
-      const u = new window.SpeechSynthesisUtterance(r.chunks[r.i++]);
-      u.lang = lang; u.rate = settings.ttsRate;
-      if (voice) u.voice = voice;
-      u.onend = next;
-      u.onerror = (e) => {
-        if (reading !== r) return;
-        if (e && (e.error === "interrupted" || e.error === "canceled")) return;
-        stopReading(); toast("อ่านออกเสียงไม่สำเร็จ");
-      };
-      window.speechSynthesis.speak(u);
-    };
-    window.speechSynthesis.cancel();
-    next();
+    const plan = speechPlan(bubble, text);
+    if (!plan.chunks.length) { toast("ไม่มีข้อความให้อ่าน"); return; }
+
+    const r = { btn, bubble, text, spans: plan.spans, chunks: plan.chunks,
+      i: 0, committed: plan.spans.length, open: false, lang, voice };
+    beginSession(r);
+    playFrom(r, 0);
+  }
+
+  // ---------- Live (read-while-it-writes) session ----------
+  // Started the moment a turn begins in auto-play, so the voice can catch up
+  // to the very first finished sentence instead of waiting for the whole turn.
+  function startLiveRead(bubble, btn) {
+    if (!ttsSupported()) return null;
+    stopReading();
+    const lang = state.lang === "en" ? "en-US" : state.lang === "th" ? "th-TH" : null;
+    const r = { btn, bubble, text: "", spans: [], chunks: [],
+      i: 0, committed: 0, open: true, live: true, waiting: true,
+      lang, voice: lang ? pickVoice(lang) : null };
+    beginSession(r);
+    btn.textContent = "⏳ กำลังเขียนต่อ…";
+    return r;
+  }
+
+  // Hand the live session however much narrative exists so far. Only sentences
+  // that can no longer change are queued for speech — the final one keeps
+  // growing until `done`, so it is held back.
+  function feedLive(r, text, done, skipRender) {
+    if (reading !== r) return;
+    r.text = text;
+    if (!skipRender) fillNarrative(r.bubble, text, null);
+    r.spans = Array.prototype.slice.call(r.bubble.querySelectorAll(".sent"));
+
+    const sents = segmentSentences(text);
+    const limit = done ? sents.length : Math.max(0, sents.length - 1);
+    for (let si = r.committed; si < limit; si++) {
+      let piece = (sents[si] || "").trim();
+      while (piece.length > 240) {
+        let cut = piece.lastIndexOf(" ", 220);
+        if (cut < 80) cut = 220;
+        r.chunks.push({ text: piece.slice(0, cut).trim(), si });
+        piece = piece.slice(cut).trim();
+      }
+      if (piece) r.chunks.push({ text: piece, si });
+    }
+    r.committed = Math.max(r.committed, limit);
+    if (done) r.open = false;
+
+    // re-rendering wiped the highlight — put it back on the live sentence
+    const cur = r.chunks[r.i];
+    if (!r.waiting && cur && cur.si >= 0 && r.spans[cur.si]) r.spans[cur.si].classList.add("now");
+    if (r.waiting) speakStep(r);
+  }
+
+  // ============================================================
+  // Auto Play (Hardcore) — the audiobook loop
+  // ============================================================
+  // write → speak → (1.5 s) → write again, hands-free, until the player
+  // stops the read or flips the switch back off.
+  const AUTO_DELAY = 1500;
+  const AUTO_ACTION =
+    "(ดำเนินเรื่องต่อเองตามสถานการณ์ที่บีบคั้นที่สุด — ตัดสินใจแทนตัวเอกให้สมเหตุสมผลกับบุคลิก " +
+    "สถานะ และสิ่งที่เพิ่งเกิดขึ้น แล้วเล่าผลลัพธ์ต่อเป็นฉากเต็ม)";
+  let autoTimer = null;
+
+  function cancelAuto(opts) {
+    if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
+    if (opts && opts.off && state && state.autoPlay) {
+      state.autoPlay = false;
+      const t = $("autoToggle");
+      if (t) t.checked = false;
+      updateHeader();
+      persist(true);
+    }
+  }
+
+  function scheduleAuto() {
+    cancelAuto();
+    if (!state || !state.autoPlay || busy) return;
+    autoTimer = setTimeout(() => { autoTimer = null; runAutoTurn(); }, AUTO_DELAY);
+  }
+
+  async function runAutoTurn() {
+    if (!state || !state.autoPlay || busy) return;
+    const ok = await takeTurn(AUTO_ACTION, { isAuto: true });
+    // A failed auto turn stops the loop rather than retrying forever on a
+    // dead key or an exhausted quota.
+    if (!ok) {
+      cancelAuto({ off: true });
+      toast("ออโต้หยุดแล้ว — เทิร์นล่าสุดไม่สำเร็จ", 4000);
+    }
+  }
+
+  // Turning the switch on picks up wherever the story already is: read the
+  // latest chapter aloud, and let the end of that read trigger the next turn.
+  function startAutoPlay() {
+    if (!state || !state.autoPlay) return;
+    if (busy) return;                       // the in-flight turn will chain
+    const rows = $("log").querySelectorAll(".msgtools");
+    const lastRow = rows[rows.length - 1];
+    const btn = lastRow && lastRow.querySelector("button");
+    if (btn && ttsSupported()) { btn.click(); return; }
+    runAutoTurn();
   }
 
   // Row under each story bubble; hidden where the browser can't speak.
@@ -991,13 +1517,38 @@
     return row;
   }
 
+  // Single place that writes the speed: keeps slider, label, storage and any
+  // in-flight utterance in sync.
+  async function setRate(v, opts) {
+    settings.ttsRate = clampRate(v);
+    const sl = $("ttsRateRange");
+    if (sl) sl.value = String(settings.ttsRate);
+    const lb = $("ttsRateLabel");
+    if (lb) lb.textContent = rateLabel(settings.ttsRate);
+    if (!opts || !opts.quiet) toast("ความเร็วเสียงอ่าน " + rateLabel(settings.ttsRate));
+    if (!opts || !opts.noRestart) applyLiveRate();
+    try { await setSetting("ttsRate", String(settings.ttsRate)); } catch (e) { }
+  }
+  function nudgeRate(d) { setRate(settings.ttsRate + d); }
+
   function speak(text) {
     if (!ttsSupported()) { toast("เครื่องนี้ไม่รองรับการอ่านออกเสียง"); return; }
-    stopReading();
+    stopReading({ userStop: true });
     window.speechSynthesis.cancel();
     const u = new window.SpeechSynthesisUtterance(text);
     u.lang = "en-US"; u.rate = Math.min(settings.ttsRate, 0.9);
     const voice = pickVoice("en-US");
+    if (voice) u.voice = voice;
+    window.speechSynthesis.speak(u);
+  }
+
+  // Preview the current speed from the settings drawer.
+  function speakSample(text, lang) {
+    if (!ttsSupported()) { toast("เครื่องนี้ไม่รองรับการอ่านออกเสียง"); return; }
+    window.speechSynthesis.cancel();
+    const u = new window.SpeechSynthesisUtterance(text);
+    u.lang = lang; u.rate = settings.ttsRate; u.pitch = settings.ttsPitch;
+    const voice = pickVoice(lang);
     if (voice) u.voice = voice;
     window.speechSynthesis.speak(u);
   }
@@ -1034,6 +1585,60 @@
         (study.fix.why ? '<div class="vnote">' + esc(study.fix.why) + "</div>" : "");
       box.appendChild(f);
     }
+    return box;
+  }
+
+  // ---------- Per-turn status panel ----------
+  // "ใครเลเวลเท่าไร ฐานบ่มเพาะเท่าไร คนอื่นกำลังทำอะไร" — shown after every
+  // turn without the player having to ask for it.
+  function renderStatusCard(snap, diff) {
+    if (!snap) return null;
+    const box = document.createElement("details");
+    box.className = "msg status";
+    box.open = !!(diff && diff.length);
+
+    const head = document.createElement("summary");
+    const bits = ["Lv." + snap.level];
+    if (snap.realm) bits.push(snap.realm);
+    bits.push("❤️ " + snap.hp + "/" + snap.maxHp);
+    head.textContent = "📊 " + bits.join(" · ") + (diff && diff.length ? "  (" + diff.length + " อัปเดต)" : "");
+    box.appendChild(head);
+
+    if (diff && diff.length) {
+      const d = document.createElement("div");
+      d.className = "stdiff";
+      d.innerHTML = diff.map(x => '<div class="d-' + x.kind + '">' + esc(x.text) + "</div>").join("");
+      box.appendChild(d);
+    }
+
+    const grid = document.createElement("div");
+    grid.className = "stgrid";
+    const cell = (label, value) => {
+      if (!value) return "";
+      return '<div class="stcell"><span class="stl">' + esc(label) + '</span><span class="stv">' + esc(value) + "</span></div>";
+    };
+    grid.innerHTML =
+      cell("เลเวล", "Lv." + snap.level + " · XP " + snap.xp) +
+      cell("ฐานบ่มเพาะ", snap.realm ? snap.realm + (snap.realmProgress ? " (" + snap.realmProgress + "%)" : "") : "") +
+      cell("HP", snap.hp + " / " + snap.maxHp) +
+      cell("เวลา", snap.worldTime) +
+      cell("สถานที่", snap.location) +
+      cell("ฉายา", (snap.titles || []).join(" · ")) +
+      cell("ทรัพยากร", (snap.resources || []).join(" · "));
+    if (grid.innerHTML) box.appendChild(grid);
+
+    const list = (label, arr, icon) => {
+      if (!arr || !arr.length) return;
+      const s = document.createElement("div");
+      s.className = "stlist";
+      s.innerHTML = '<div class="stlh">' + icon + " " + esc(label) + "</div>" +
+        arr.slice(0, 8).map(x => '<div class="stli">• ' + esc(x) + "</div>").join("");
+      box.appendChild(s);
+    };
+    list("โลกภายนอกตอนนี้", snap.worldEvents, "🌍");
+    list("คู่แข่ง / ศัตรู", snap.rivals, "⚔️");
+    list("ฝ่าย / สำนัก", snap.factions, "🏯");
+    list("ภารกิจค้าง", snap.quests, "🎯");
     return box;
   }
 
@@ -1076,7 +1681,9 @@
 
   function updateHeader() {
     $("headerTitle").textContent = state.title || state.name;
-    $("headerHp").textContent = "❤️ " + state.hp + "/" + state.maxHp + " · Lv." + state.level;
+    $("headerHp").textContent = (state.autoPlay ? "▶️ ออโต้ · " : "") +
+      "❤️ " + state.hp + "/" + state.maxHp + " · Lv." + state.level;
+    $("autoStopBtn").style.display = state.autoPlay ? "block" : "none";
   }
 
   function memSize() {
@@ -1092,7 +1699,7 @@
     $("charName").textContent = state.name;
     $("charDescView").textContent = state.charDesc || "(ยังไม่ระบุ — กด ✏️ เพื่อเพิ่ม)";
     $("worldView").textContent = state.world || "(ยังไม่ระบุ — AI สร้างสรรค์เอง)";
-    $("modeView").textContent = { rpg: "RPG", story: "Story", dnd: "D&D" }[state.mode] || state.mode;
+    $("modeView").textContent = MODE_LABELS[state.mode] || state.mode;
     if ($("modeSelect").value !== state.mode) $("modeSelect").value = state.mode;
     $("hpText").textContent = "HP " + state.hp + " / " + state.maxHp;
     $("lvText").textContent = "Lv." + state.level + " · XP " + state.xp;
@@ -1110,10 +1717,27 @@
     $("cefrSelect").value = state.cefr;
     $("studyOpts").style.display = state.lang === "en" ? "block" : "none";
     $("vocabBtn").textContent = "📚 สมุดคำศัพท์ (" + state.vocab.length + " คำ)";
-    $("ttsRateSelect").value = String(settings.ttsRate);
+    $("ttsRateRange").value = String(settings.ttsRate);
+    $("ttsRateLabel").textContent = rateLabel(settings.ttsRate);
+    $("ttsFollowToggle").checked = !!settings.ttsFollow;
+    $("autoToggle").checked = !!state.autoPlay;
+    $("fxToggle").checked = state.fx !== false;
+    $("statusToggle").checked = state.showStatus !== false;
+    $("realmText").textContent = state.realm || "-";
+    $("realmBar").style.width = Math.max(0, Math.min(100, state.realmProgress || 0)) + "%";
+    $("realmPct").textContent = (state.realmProgress || 0) + "%";
+    $("worldTimeText").textContent = state.worldTime || "-";
+    const lines = (arr, bullet) => (arr && arr.length)
+      ? arr.map(x => (bullet ? "• " : "") + esc(x)).join("<br>") : '<span class="dim">-</span>';
+    $("titlesText").innerHTML = lines(state.titles);
+    $("resText").innerHTML = lines(state.resources);
     $("locationText").textContent = state.location || "-";
-    $("npcsText").innerHTML = state.npcs.length ? state.npcs.map(esc).join("<br>") : '<span class="dim">-</span>';
-    $("flagsText").innerHTML = state.flags.length ? state.flags.map(f => "• " + esc(f)).join("<br>") : '<span class="dim">-</span>';
+    $("npcsText").innerHTML = lines(state.npcs);
+    $("factionsText").innerHTML = lines(state.factions);
+    $("rivalsText").innerHTML = lines(state.rivals);
+    $("questsText").innerHTML = lines(state.quests, true);
+    $("worldEventsText").innerHTML = lines(state.worldEvents, true);
+    $("flagsText").innerHTML = lines(state.flags, true);
     $("memStat").innerHTML =
       "บทสรุปสะสม <b>" + state.chapters.length + "</b> ตอน · บทสนทนาสด <b>" + state.ctx.length + "</b> ข้อความ<br>" +
       "ขนาดเซฟ <b>" + fmtBytes(memSize()) + "</b> · ขนาด prompt/เทิร์น <b>" + fmtBytes(promptSize()) + "</b><br>" +
@@ -1125,7 +1749,7 @@
 
   function renderAll(showAll) {
     const l = $("log");
-    stopReading();
+    stopReading({ userStop: true });   // undo/retry/reload ends the audiobook
     l.innerHTML = "";
     const total = state.log.length;
     renderFrom = showAll ? 0 : Math.max(0, total - RENDER_WINDOW);
@@ -1148,6 +1772,10 @@
         l.appendChild(el);
         l.appendChild(aiTools(el, m.content));
         if (m.study) l.appendChild(renderStudyCard(m.study));
+        if (state.showStatus !== false && m.status) {
+          const card = renderStatusCard(m.status, m.diff);
+          if (card) { card.open = false; l.appendChild(card); }
+        }
         continue;
       }
       el.textContent = m.content;
@@ -1156,7 +1784,7 @@
     updateHeader();
     applyInputHint();
     renderDrawer();
-    if (!showAll) scrollLog();
+    if (!showAll) scrollLog(true);
   }
 
   // ============================================================
@@ -1289,13 +1917,24 @@
     });
     $("sendBtn").onclick = send;
     $("stopBtn").onclick = () => { if (currentAbort) currentAbort.abort(); };
+    // one big obvious brake for the hands-free loop
+    $("autoStopBtn").onclick = () => {
+      cancelAuto({ off: true });
+      stopReading();
+      if (currentAbort) currentAbort.abort();
+      renderSys("⏹️ หยุด Auto Play แล้ว");
+      pushLog("sys", "หยุด Auto Play");
+      persist(true);
+    };
     document.querySelectorAll("#chips button").forEach(b => {
       b.onclick = () => { $("actionInput").value = b.dataset.a; send(); };
     });
     // tap a highlighted word in the story → its Thai meaning
     $("log").addEventListener("click", (e) => {
       const mk = e.target.closest && e.target.closest("mark.vw");
-      const st = mk && mk.parentElement && mk.parentElement._study;
+      // marks live inside .sent spans now, so walk up to the bubble itself
+      const bub = mk && mk.closest(".msg.ai");
+      const st = bub && bub._study;
       if (!st) return;
       const v = st.vocab[+mk.dataset.i];
       if (v) toast(v.word + (v.pos ? " (" + v.pos + ")" : "") + " — " + v.th, 4500);
@@ -1390,7 +2029,7 @@
       state.mode = $("modeSelect").value;
       renderDrawer();
       await persist(true);
-      toast("เปลี่ยนโหมดเป็น " + state.mode.toUpperCase() + " แล้ว");
+      toast("เปลี่ยนโหมดเป็น " + (MODE_LABELS[state.mode] || state.mode) + " แล้ว");
     };
 
     // language / length / study options — take effect from the next turn
@@ -1414,12 +2053,51 @@
       () => "โหมดเพื่อการศึกษา: " + (state.study ? "เปิด" : "ปิด"));
     optChange("cefrSelect", () => { state.cefr = $("cefrSelect").value; },
       () => "ระดับภาษาอังกฤษ: " + CEFR_LABELS[state.cefr]);
+    optChange("fxToggle", () => { state.fx = $("fxToggle").checked; },
+      () => "เอฟเฟคฉากบู้: " + (state.fx ? "เปิด" : "ปิด"));
+    $("autoToggle").onchange = async () => {
+      state.autoPlay = $("autoToggle").checked;
+      updateHeader();
+      await persist(true);
+      if (state.autoPlay) {
+        renderSys("▶️ Auto Play (Hardcore) เปิดแล้ว — AI จะเล่าและอ่านต่อเองจนกว่าจะกดหยุด");
+        pushLog("sys", "เปิด Auto Play (Hardcore)");
+        closeDrawer();
+        startAutoPlay();
+      } else {
+        cancelAuto();
+        stopReading();
+        renderSys("⏹️ ปิด Auto Play แล้ว");
+        pushLog("sys", "ปิด Auto Play");
+      }
+    };
+    $("statusToggle").onchange = async () => {
+      state.showStatus = $("statusToggle").checked;
+      await persist(true);
+      toast("แผงสถานะท้ายตอน: " + (state.showStatus ? "เปิด" : "ปิด"));
+    };
     $("vocabBtn").onclick = openVocab;
-    // speech speed is a device preference, shared by every game
-    $("ttsRateSelect").onchange = async () => {
-      settings.ttsRate = parseFloat($("ttsRateSelect").value);
-      await setSetting("ttsRate", $("ttsRateSelect").value);
-      toast("ความเร็วเสียงอ่าน: " + TTS_RATES[$("ttsRateSelect").value]);
+
+    // speech speed is a device preference, shared by every game.
+    // input = live label (no restart), change = commit + re-speak at the new speed
+    $("ttsRateRange").oninput = () => {
+      settings.ttsRate = clampRate($("ttsRateRange").value);
+      $("ttsRateLabel").textContent = rateLabel(settings.ttsRate);
+    };
+    $("ttsRateRange").onchange = () => setRate($("ttsRateRange").value);
+    $("ttsSlower").onclick = () => nudgeRate(-TTS_STEP);
+    $("ttsFaster").onclick = () => nudgeRate(TTS_STEP);
+    $("ttsReset").onclick = () => setRate(1);
+    $("ttsTest").onclick = () => {
+      stopReading({ userStop: true });
+      const th = !state || state.lang !== "en";
+      speakSample(th ? "นี่คือความเร็วในการอ่านที่คุณเลือกไว้ ลองฟังดูว่าพอดีไหม"
+        : "This is the reading speed you picked. Listen and see if it feels right.", th ? "th-TH" : "en-US");
+    };
+    $("ttsFollowToggle").onchange = async () => {
+      settings.ttsFollow = $("ttsFollowToggle").checked;
+      await setSetting("ttsFollow", settings.ttsFollow ? "1" : "0");
+      toast("เลื่อนจอตามประโยคที่อ่าน: " + (settings.ttsFollow ? "เปิด" : "ปิด"));
     };
 
     $("editStateBtn").onclick = openStateEditor;
@@ -1462,10 +2140,19 @@
     $("seMaxHp").value = state.maxHp;
     $("seLevel").value = state.level;
     $("seXp").value = state.xp;
+    $("seRealm").value = state.realm || "";
+    $("seRealmProgress").value = state.realmProgress || 0;
+    $("seWorldTime").value = state.worldTime || "";
     $("seLocation").value = state.location || "";
+    $("seTitles").value = (state.titles || []).join("\n");
+    $("seRes").value = (state.resources || []).join("\n");
     $("seSkills").value = state.skills.join("\n");
     $("seInv").value = state.inventory.join("\n");
     $("seNpcs").value = state.npcs.join("\n");
+    $("seFactions").value = (state.factions || []).join("\n");
+    $("seRivals").value = (state.rivals || []).join("\n");
+    $("seQuests").value = (state.quests || []).join("\n");
+    $("seWorldEvents").value = (state.worldEvents || []).join("\n");
     $("seFlags").value = state.flags.join("\n");
     openModal("stateModal");
   }
@@ -1476,10 +2163,19 @@
       state.hp = Math.max(0, Math.min(mh, parseInt($("seHp").value, 10) || 0));
       state.level = Math.max(1, parseInt($("seLevel").value, 10) || 1);
       state.xp = Math.max(0, parseInt($("seXp").value, 10) || 0);
+      state.realm = $("seRealm").value.trim();
+      state.realmProgress = Math.max(0, Math.min(100, parseInt($("seRealmProgress").value, 10) || 0));
+      state.worldTime = $("seWorldTime").value.trim();
       state.location = $("seLocation").value.trim();
+      state.titles = linesToArr($("seTitles").value);
+      state.resources = linesToArr($("seRes").value);
       state.skills = linesToArr($("seSkills").value);
       state.inventory = linesToArr($("seInv").value);
       state.npcs = linesToArr($("seNpcs").value);
+      state.factions = linesToArr($("seFactions").value);
+      state.rivals = linesToArr($("seRivals").value);
+      state.quests = linesToArr($("seQuests").value);
+      state.worldEvents = linesToArr($("seWorldEvents").value);
       state.flags = linesToArr($("seFlags").value);
       closeModals();
       updateHeader(); renderDrawer();
@@ -1837,12 +2533,13 @@
 
     settings.apiKey = await getSetting("apiKey", "");
     settings.model = await getSetting("model", DEFAULT_MODEL) || DEFAULT_MODEL;
-    const rate = String(await getSetting("ttsRate", "0.85"));
-    settings.ttsRate = TTS_RATES[rate] ? parseFloat(rate) : 0.85;
+    settings.ttsRate = clampRate(await getSetting("ttsRate", "0.85"));
+    settings.ttsPitch = 1;
+    settings.ttsFollow = String(await getSetting("ttsFollow", "1")) !== "0";
     const savedList = await getSetting("modelList", null);
     if (Array.isArray(savedList) && savedList.length) modelList = savedList;
 
-    bindSetup(); bindInput(); bindDrawer(); bindTurnTools();
+    bindSetup(); bindInput(); bindDrawer(); bindTurnTools(); bindScrollFollow();
     bindStateEditor(); bindChapters(); bindExport(); bindSlots(); bindSettings(); bindVocab();
 
     // Chrome loads voices lazily; ask early so the first 🔊 gets a good one
@@ -1863,6 +2560,7 @@
 
     if (loaded) {
       state = defaultState(loaded);
+      state.autoPlay = false;   // reopening the app never restarts the loop by itself
       $("modeSelect").value = state.mode;
       show("game");
       renderAll();

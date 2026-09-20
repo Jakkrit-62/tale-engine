@@ -77,6 +77,7 @@
       <button type="button" class="mode-btn active" data-mode="rpg">RPG<span>สกิล/ไอเทม</span></button>
       <button type="button" class="mode-btn" data-mode="story">Story<span>เน้นเนื้อเรื่อง</span></button>
       <button type="button" class="mode-btn" data-mode="dnd">D&amp;D<span>ทอยลูกเต๋า</span></button>
+      <button type="button" class="mode-btn" data-mode="cultivation">บ่มเพาะ<span>เซียน/ไต่ขั้น</span></button>
     </div>
   </div>
 
@@ -132,11 +133,15 @@
       <div class="title" id="headerTitle">Tale Engine</div>
       <div class="hp" id="headerHp"></div>
     </div>
+    <button id="autoStopBtn" class="autostop" style="display:none">⏹ หยุดออโต้</button>
     <span id="saveDot" class="savedot ok" title="บันทึกแล้ว"></span>
     <button class="icon-btn" id="openDrawer">☰</button>
   </header>
 
-  <div id="log"></div>
+  <div id="logwrap">
+    <div id="log"></div>
+    <button id="jumpBtn" type="button">↓ ข้อความใหม่</button>
+  </div>
 
   <div class="chips" id="chips">
     <button data-a="มองไปรอบๆ อย่างละเอียด">👀 มองรอบตัว</button>
@@ -191,6 +196,7 @@
         <option value="rpg">RPG — เน้นสกิล/ไอเทม</option>
         <option value="story">Story — เน้นเนื้อเรื่อง</option>
         <option value="dnd">D&amp;D — ทอยลูกเต๋า</option>
+        <option value="cultivation">บ่มเพาะ — เซียน/ไต่ขั้น</option>
       </select>
     </div>
 
@@ -228,14 +234,26 @@
           <option value="C1">C1 — สูง</option>
         </select>
       </div>
-      <label class="lbl">ความเร็วเสียงอ่าน (🔊 ฟังตอนนี้)</label>
-      <select id="ttsRateSelect">
-        <option value="0.7">ช้า — ฝึกฟังทีละคำ</option>
-        <option value="0.85">ค่อนข้างช้า</option>
-        <option value="1">ปกติ</option>
-        <option value="1.15">เร็ว</option>
-      </select>
       <button id="vocabBtn" class="ghost full" style="margin-top:10px">📚 สมุดคำศัพท์</button>
+    </div>
+
+    <div class="dsec">
+      <div class="dsechead"><span>เสียงอ่าน &amp; การติดตาม</span></div>
+      <label class="lbl">ความเร็วเสียงอ่าน <span id="ttsRateLabel" class="ratelbl">×0.85</span></label>
+      <div class="raterow">
+        <button id="ttsSlower" class="ghost sq" title="ช้าลง">🐢</button>
+        <input type="range" id="ttsRateRange" min="0.4" max="2.5" step="0.05" value="0.85">
+        <button id="ttsFaster" class="ghost sq" title="เร็วขึ้น">🐇</button>
+      </div>
+      <div class="row2">
+        <button id="ttsTest" class="ghost sm">▶️ ลองฟัง</button>
+        <button id="ttsReset" class="ghost sm">↺ กลับเป็น ×1</button>
+      </div>
+      <label class="switch" style="margin-top:12px">
+        <input type="checkbox" id="ttsFollowToggle" checked>
+        <span><b>🎯 เลื่อนจอตามประโยคที่อ่าน</b><br>
+        <span class="dim sm">ไฮไลต์ประโยคที่กำลังอ่านและเลื่อนจอตามให้อัตโนมัติ</span></span>
+      </label>
     </div>
 
     <div class="dsec">
@@ -247,12 +265,50 @@
       <div class="taglist" id="skillsList"></div>
       <div class="lbl">ไอเทม</div>
       <div class="taglist" id="invList"></div>
+      <div class="lbl">ฐานบ่มเพาะ / ขั้นพลัง</div>
+      <div class="sm" id="realmText">-</div>
+      <div class="bar-bg" style="margin-top:4px"><div class="bar-fill realm" id="realmBar"></div></div>
+      <div class="sm dim" style="text-align:right" id="realmPct">0%</div>
+      <div class="lbl">ฉายา / ตำแหน่ง</div>
+      <div class="sm" id="titlesText">-</div>
+      <div class="lbl">ทรัพยากร</div>
+      <div class="sm" id="resText">-</div>
+      <div class="lbl">เวลาในโลก</div>
+      <div class="sm" id="worldTimeText">-</div>
       <div class="lbl">สถานที่ปัจจุบัน</div>
       <div class="sm" id="locationText">-</div>
       <div class="lbl">ตัวละครที่เคยเจอ</div>
       <div class="sm" id="npcsText">-</div>
+      <div class="lbl">ฝ่าย / สำนัก</div>
+      <div class="sm" id="factionsText">-</div>
+      <div class="lbl">คู่แข่ง / ศัตรู</div>
+      <div class="sm" id="rivalsText">-</div>
+      <div class="lbl">ภารกิจค้าง</div>
+      <div class="sm" id="questsText">-</div>
+      <div class="lbl">🌍 โลกภายนอกกำลังทำอะไร</div>
+      <div class="sm" id="worldEventsText">-</div>
       <div class="lbl">เหตุการณ์สำคัญ</div>
       <div class="sm" id="flagsText">-</div>
+    </div>
+
+    <div class="dsec">
+      <div class="dsechead"><span>สไตล์การเขียน</span></div>
+      <label class="switch">
+        <input type="checkbox" id="autoToggle">
+        <span><b>▶️ Auto Play (Hardcore)</b><br>
+        <span class="dim sm">AI เล่าต่อเองไม่ต้องสั่ง + อ่านออกเสียงให้ฟังไปด้วย พออ่านจบตอนก็เจนตอนใหม่วนไปเรื่อยๆ
+        ความยากสูงสุด ศัตรูฉลาด ตลบหลังเป็น และตัวเอกเก่งขึ้นแบบค่อยเป็นค่อยไป</span></span>
+      </label>
+      <label class="switch" style="margin-top:12px">
+        <input type="checkbox" id="fxToggle" checked>
+        <span><b>💥 เอฟเฟคฉากบู้</b><br>
+        <span class="dim sm">ฉากต่อสู้แตกเป็นจังหวะ มีเสียงกระแทกและราคาที่ต้องจ่ายทุกหมัด</span></span>
+      </label>
+      <label class="switch" style="margin-top:12px">
+        <input type="checkbox" id="statusToggle" checked>
+        <span><b>📊 แผงสถานะท้ายตอน</b><br>
+        <span class="dim sm">สรุปเลเวล ฐานบ่มเพาะ และสิ่งที่เปลี่ยนไปให้อัตโนมัติทุกตอน</span></span>
+      </label>
     </div>
 
     <div class="dsec">
@@ -322,14 +378,32 @@
         <div><label class="lbl">Level</label><input type="number" id="seLevel"></div>
         <div><label class="lbl">XP</label><input type="number" id="seXp"></div>
       </div>
+      <div class="grid2">
+        <div><label class="lbl">ฐานบ่มเพาะ / ขั้นพลัง</label><input type="text" id="seRealm"></div>
+        <div><label class="lbl">คืบหน้าขั้นถัดไป (%)</label><input type="number" id="seRealmProgress"></div>
+      </div>
+      <label class="lbl">เวลาในโลก</label>
+      <input type="text" id="seWorldTime">
       <label class="lbl">สถานที่ปัจจุบัน</label>
       <input type="text" id="seLocation">
+      <label class="lbl">ฉายา / ตำแหน่ง (บรรทัดละ 1 รายการ)</label>
+      <textarea id="seTitles" rows="2"></textarea>
+      <label class="lbl">ทรัพยากร (บรรทัดละ 1 รายการ)</label>
+      <textarea id="seRes" rows="2"></textarea>
       <label class="lbl">สกิล (บรรทัดละ 1 รายการ)</label>
       <textarea id="seSkills" rows="3"></textarea>
       <label class="lbl">ไอเทม (บรรทัดละ 1 รายการ)</label>
       <textarea id="seInv" rows="3"></textarea>
       <label class="lbl">ตัวละครที่เคยเจอ (บรรทัดละ 1 รายการ)</label>
       <textarea id="seNpcs" rows="3"></textarea>
+      <label class="lbl">ฝ่าย / สำนัก (บรรทัดละ 1 รายการ)</label>
+      <textarea id="seFactions" rows="2"></textarea>
+      <label class="lbl">คู่แข่ง / ศัตรู (บรรทัดละ 1 รายการ)</label>
+      <textarea id="seRivals" rows="2"></textarea>
+      <label class="lbl">ภารกิจค้าง (บรรทัดละ 1 รายการ)</label>
+      <textarea id="seQuests" rows="2"></textarea>
+      <label class="lbl">โลกภายนอกกำลังทำอะไร (บรรทัดละ 1 รายการ)</label>
+      <textarea id="seWorldEvents" rows="2"></textarea>
       <label class="lbl">เหตุการณ์สำคัญ (บรรทัดละ 1 รายการ)</label>
       <textarea id="seFlags" rows="3"></textarea>
       <button id="seSave" class="primary full" style="margin-top:12px">บันทึกสถานะ</button>

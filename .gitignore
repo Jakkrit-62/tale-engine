@@ -1,2 +1,42 @@
 node_modules/
 package-lock.json
+
+# ---- Secrets: never commit these ----
+# The app keeps the Gemini key in the browser's IndexedDB, so nothing here
+# should ever hold one. These lines are the safety net if that changes.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*.jks
+id_rsa
+id_ed25519
+secrets.json
+credentials.json
+service-account*.json
+apikey*.txt
+*.local
+
+# ---- Build / tooling output ----
+dist/
+build/
+coverage/
+*.log
+npm-debug.log*
+.cache/
+
+# ---- Editor / OS junk ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# ---- Local agent/tool state ----
+.claude/

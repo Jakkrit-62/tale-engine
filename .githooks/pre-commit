@@ -1,0 +1,55 @@
+#!/bin/sh
+# Tale Engine — block secrets from ever entering a commit.
+#
+# This repo is published on GitHub Pages, so every committed byte is public
+# forever (rewriting history does not un-leak a key that was already pushed).
+# The Gemini key is supposed to live only in the browser's IndexedDB; this
+# hook is the safety net for the day someone pastes one into a file.
+#
+# Enable with:  git config core.hooksPath .githooks   (npm install does it)
+# Bypass once:  git commit --no-verify                (only when you are sure)
+
+fail=0
+red() { printf '\033[31m%s\033[0m\n' "$1"; }
+
+# ---- 1. files that should never be committed at all ----
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+for f in $staged; do
+  case "$f" in
+    .env|.env.*|*.pem|*.key|*.p12|*.pfx|*.keystore|*.jks|id_rsa|id_ed25519|\
+    secrets.json|credentials.json|service-account*.json)
+      red "✖ ไฟล์นี้ไม่ควรถูก commit: $f"
+      fail=1
+      ;;
+  esac
+done
+
+# ---- 2. secret-shaped strings in the lines being added ----
+added=$(git diff --cached -U0 --diff-filter=ACM | grep '^+' | grep -v '^+++')
+
+scan() {
+  hits=$(printf '%s' "$added" | grep -nE "$1")
+  if [ -n "$hits" ]; then
+    red "✖ เจอ$2 ในโค้ดที่กำลังจะ commit:"
+    printf '%s\n' "$hits" | head -5 | sed 's/^/    /'
+    fail=1
+  fi
+}
+
+scan 'AIza[0-9A-Za-z_-]{35}'                  'Google/Gemini API key'
+scan 'gh[pousr]_[A-Za-z0-9]{36}'              'GitHub token'
+scan 'github_pat_[A-Za-z0-9_]{50,}'           'GitHub fine-grained token'
+scan 'AKIA[0-9A-Z]{16}'                       'AWS access key'
+scan 'sk-[A-Za-z0-9]{32,}'                    'OpenAI-style API key'
+scan 'xox[baprs]-[A-Za-z0-9-]{10,}'           'Slack token'
+scan 'BEGIN [A-Z ]*PRIVATE KEY'               'private key'
+scan '(password|passwd|secret|token)[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{8,}' 'รหัสผ่าน/โทเคนแบบ hard-code'
+
+if [ "$fail" = 1 ]; then
+  echo ""
+  red "commit ถูกยกเลิก — เอาความลับออกก่อน"
+  echo "  ถ้าแน่ใจว่าเป็น false positive:  git commit --no-verify"
+  exit 1
+fi
+
+exit 0

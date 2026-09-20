@@ -22,6 +22,7 @@ const STUDY = (words, fix) => "<<STUDY>>" + JSON.stringify({
 });
 
 let mock = "study";
+let streamParts = 1;
 let lastBody = null, lastText = "";
 let turnNo = 0;
 function reply() {
@@ -60,7 +61,22 @@ win.fetch = async (url, opts) => {
   if (sys.includes("ผู้ช่วยสรุปเนื้อเรื่อง")) text = "summary";
   else { lastBody = body; text = reply(); }
   const sse = "data: " + JSON.stringify({ candidates: [{ content: { parts: [{ text }] }, finishReason: "STOP" }] }) + "\n\n";
-  return { ok: true, status: 200, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }) };
+  const enc = new TextEncoder();
+  // streamParts: hand the turn over in pieces, with a gap between them, so a
+  // test can watch the reader work on half-written narrative — the real
+  // audiobook case, where speech starts before the turn has finished.
+  if (streamParts > 1 && !sys.includes("ผู้ช่วยสรุปเนื้อเรื่อง")) {
+    const ev = (t) => "data: " + JSON.stringify({ candidates: [{ content: { parts: [{ text: t }] }, finishReason: "STOP" }] }) + "\n\n";
+    const size = Math.ceil(text.length / streamParts);
+    return { ok: true, status: 200, body: new ReadableStream({ async start(c) {
+      for (let k = 0; k < text.length; k += size) {
+        c.enqueue(enc.encode(ev(text.slice(k, k + size))));
+        await new Promise(r => setTimeout(r, 30));
+      }
+      c.close();
+    } }) };
+  }
+  return { ok: true, status: 200, body: new ReadableStream({ start(c) { c.enqueue(enc.encode(sse)); c.close(); } }) };
 };
 // fake speech engine: utterances wait until the test ends them
 const spoken = [];
@@ -105,13 +121,19 @@ await settle(60);
 out.push("[2] Prompt");
 check("English rule in prompt", sysText().includes("ภาษาอังกฤษเสมอ"));
 check("CEFR level in prompt", sysText().includes("B2 (upper-intermediate)"));
-check("long length rule in prompt", sysText().includes("700-1000"));
+check("long length rule in prompt", sysText().includes("800-1100"));
+check("novel-craft rules in prompt", sysText().includes("วิธีเขียนให้เป็นนิยายจริง") && sysText().includes("บทสนทนาจริงอย่างน้อย"));
+check("action-FX rules in prompt", sysText().includes("ฉากต่อสู้/ฉากบู้"));
+check("living-world rules in prompt", sysText().includes("โลกที่ยังหายใจอยู่") && sysText().includes("worldEvents"));
+check("progression fields in STATE schema", /realm.*realmProgress|realmProgress/.test(sysText()) && sysText().includes('"rivals"'));
 check("third-person rule uses name", sysText().includes('เรียกตัวเอกด้วยชื่อ "Kael"'));
 check("study format in prompt", sysText().includes("<<STUDY>>"));
 check("input placeholder switches to English", $("actionInput").placeholder.startsWith("Type your action"));
 
 out.push("[3] Opening turn with study card");
 const ai = () => q("#log .msg.ai");
+// setRate() writes the committed speed back onto the slider, so the slider IS the state
+const settingsRate = () => parseFloat($("ttsRateRange").value);
 check("narrative rendered", ai().length === 1);
 check("STUDY/STATE markers hidden from story", !ai()[0].textContent.includes("<<"));
 check("vocab card rendered", q("#log .msg.study").length === 1);
@@ -204,10 +226,109 @@ tools()[enIdx].click();
 check("starting another bubble stops the first", !ai()[last].classList.contains("reading") && ai()[enIdx].classList.contains("reading"));
 $("undoBtn").click(); await settle(40);
 check("re-render stops reading", !q("#log .msg.ai.reading").length);
-$("ttsRateSelect").value = "0.7"; await $("ttsRateSelect").onchange();
+$("ttsRateRange").value = "0.7"; await $("ttsRateRange").onchange();
 tools()[0].click();
 check("rate setting applied", spoken[spoken.length - 1].rate === 0.7);
 tools()[0].click();
+
+out.push("[T] Reading speed — fine-grained control");
+$("ttsRateRange").value = "1.35"; await $("ttsRateRange").onchange();
+check("slider accepts any step, not just 4 presets", Math.abs(settingsRate() - 1.35) < 1e-6, String(settingsRate()));
+$("ttsSlower").click(); await settle(5);
+check("🐢 nudges down one step", Math.abs(settingsRate() - 1.30) < 1e-6, String(settingsRate()));
+$("ttsFaster").click(); $("ttsFaster").click(); await settle(5);
+check("🐇 nudges up", Math.abs(settingsRate() - 1.40) < 1e-6, String(settingsRate()));
+$("ttsRateRange").value = "9"; await $("ttsRateRange").onchange();
+check("out-of-range speed is clamped, never NaN", settingsRate() === 2.5, String(settingsRate()));
+$("ttsReset").click(); await settle(5);
+check("reset returns to x1", settingsRate() === 1, String(settingsRate()));
+
+out.push("[U] Sentence highlight + slide-along");
+tools()[0].click(); await settle(5);
+const bub0 = ai()[0];
+check("narrative is split into sentence spans", bub0.querySelectorAll(".sent").length > 1,
+  String(bub0.querySelectorAll(".sent").length));
+check("spans rebuild the original text exactly",
+  [...bub0.querySelectorAll(".sent")].map(x => x.textContent).join("") === bub0.textContent);
+check("the sentence being read is highlighted", bub0.querySelectorAll(".sent.now").length === 1);
+const firstNow = bub0.querySelector(".sent.now");
+endCurrent(); await settle(5);
+check("highlight moves to the next sentence",
+  bub0.querySelectorAll(".sent.now").length === 1 && bub0.querySelector(".sent.now") !== firstNow);
+q("#log .readnav button")[1].click(); await settle(5);
+check("⏭ skips a sentence without stopping", bub0.querySelectorAll(".sent.now").length === 1);
+tools()[0].click(); await settle(5);
+check("stopping clears the highlight", bub0.querySelectorAll(".sent.now").length === 0);
+
+out.push("[V] Auto-scroll only while pinned to the bottom");
+const log = $("log");
+Object.defineProperty(log, "scrollHeight", { value: 4000, configurable: true });
+Object.defineProperty(log, "clientHeight", { value: 500, configurable: true });
+log.scrollTop = 3500;
+log.dispatchEvent(new win.Event("scroll")); await settle(5);
+const pinnedTop = log.scrollTop;
+check("pinned at bottom → still follows", pinnedTop === 3500);
+await play("ส่งคำสั่งใหม่");
+check("sending an action does jump to the newest text", log.scrollTop === 4000, String(log.scrollTop));
+log.scrollTop = 1000;                       // reader scrolls up to read
+log.dispatchEvent(new win.Event("scroll")); await settle(5);
+$("fxToggle").checked = false; await $("fxToggle").onchange();   // appends below
+check("new text below does NOT yank the view down", log.scrollTop === 1000, String(log.scrollTop));
+check("a 'new text below' pill appears instead", $("jumpBtn").classList.contains("show"));
+$("jumpBtn").click(); await settle(5);
+check("tapping the pill jumps back down", log.scrollTop === 4000);
+check("pill hides again once back at the bottom", !$("jumpBtn").classList.contains("show"));
+
+out.push("[W] Auto Play (Hardcore) — rules");
+mock = "plain";
+const userBubbles = q("#log .msg.user").length;
+const aiCount = () => ai().length;
+$("autoToggle").checked = true; await $("autoToggle").onchange(); await settle(120);
+check("auto banner shown in header", $("headerHp").textContent.startsWith("▶️ ออโต้"));
+check("stop-auto brake is visible", $("autoStopBtn").style.display === "block");
+
+out.push("[X] Audiobook loop — read to the end, then write the next chapter");
+const turnsBefore = aiCount();
+check("reading started on its own when the switch went on", spoken.length > 0);
+for (let k = 0; k < 60 && spoken[spoken.length - 1] && spoken[spoken.length - 1].onend; k++) {
+  const n = spoken.length;
+  endCurrent(); await settle(2);
+  if (spoken.length === n) break;             // queue drained
+}
+await sleep(1800); await settle(150);          // AUTO_DELAY is 1.5 s
+check("finishing the read orders the next turn by itself", aiCount() > turnsBefore,
+  turnsBefore + " → " + aiCount());
+check("auto turns add no fake user bubble", q("#log .msg.user").length === userBubbles);
+check("auto turn tells the AI to drive the story itself",
+  allText().includes("ดำเนินเรื่องต่อเองตามสถานการณ์ที่บีบคั้นที่สุด"));
+check("hardcore rules reach the prompt",
+  sysText().includes("Auto Play (Hardcore)") && sysText().includes("ตลบหลัง") && sysText().includes("พิษ, กับดัก, เวลาจำกัด"));
+check("no-jump-in-power rule present", sysText().includes("ห้ามได้พลังก้าวกระโดดแบบง่ายๆ"));
+check("auto ending rule replaces the open question",
+  sysText().includes("นักเขียนนิยายมืออาชีพของจีน") && !sysText().includes("จบทุกครั้งด้วยสถานการณ์ที่ผู้เล่นต้องตัดสินใจ"));
+
+out.push("[Y] Reading while it is still being written");
+$("autoStopBtn").click(); await settle(80);
+check("brake stops the loop", $("headerHp").textContent.indexOf("▶️") < 0 && $("autoStopBtn").style.display === "none");
+
+streamParts = 4;
+$("autoToggle").checked = true; await $("autoToggle").onchange();
+let sawPartial = false, sawEarlySpeech = false;
+for (let k = 0; k < 160 && !sawEarlySpeech; k++) {
+  const b = q("#log .msg.ai.streaming")[0];
+  if (b && b.querySelectorAll(".sent").length) {
+    sawPartial = true;
+    if (spoken.length) sawEarlySpeech = true;
+  }
+  if (spoken.length && spoken[spoken.length - 1].onend) endCurrent();
+  await sleep(5);
+}
+check("half-written narrative is already split into sentences", sawPartial);
+check("the voice starts before the turn has finished", sawEarlySpeech);
+check("no scroll pill flashing during the audiobook", !$("jumpBtn").classList.contains("show"));
+streamParts = 1;
+$("autoStopBtn").click(); await settle(150);
+check("everything stops cleanly", !q("#log .msg.ai.reading").length && !q("#log .msg.ai.streaming").length);
 
 check("no runtime errors", errors.filter(e => !/STUDY JSON|Not implemented: navigation/.test(e)).length === 0, errors[0]);
 
