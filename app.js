@@ -415,6 +415,9 @@
       // Novel craft knobs. Older saves default to "on" — this is the
       // behaviour the player asked for and it never breaks an old story.
       fx: true, showStatus: true, autoPlay: false,
+      // โหมด Qidian: บังคับจังหวะเว็บโนเวลจีน (กฎอยู่ใน qidian-mode/qidian.js)
+      // ปิดไว้เป็นค่าเริ่มต้น เซฟเก่าจึงเล่นต่อได้เหมือนเดิมทุกประการ
+      qidian: false, qidianNotes: [],
       hp: 20, maxHp: 20, level: 1, xp: 0,
       skills: [], inventory: [],
       location: "", npcs: [], flags: [],
@@ -557,6 +560,14 @@
     ];
   }
 
+  // โหมด Qidian อยู่ในไฟล์แยก (qidian-mode/qidian.js) ถ้าไฟล์โหลดไม่ขึ้น
+  // เกมต้องเล่นต่อได้ตามปกติ จึงเช็กก่อนทุกครั้งแทนที่จะพึ่งว่ามันมีแน่
+  const qidianOn = () => !!(state && state.qidian && window.QIDIAN);
+
+  function qidianRules() {
+    return qidianOn() ? window.QIDIAN.rules(state) : [];
+  }
+
   function systemRules() {
     return [
       'คุณคือ Game Master ของเกม text-adventure ส่วนตัวแบบเล่นคนเดียว ชื่อ "Tale Engine"',
@@ -572,6 +583,7 @@
       "- คุณจะได้รับบทสรุปเนื้อเรื่องเก่า (ความจำระยะยาว) และสถานะโลก/ตัวละครล่าสุด ต้องยึดข้อมูลเหล่านี้เป็นความจริง ห้ามขัดแย้ง",
       "- HP ห้ามต่ำกว่า 0 หรือเกิน maxHp ถ้า HP ถึง 0 ให้บรรยายภาวะวิกฤต/หมดสติ/ต้องพักฟื้น แต่ห้ามจบเกม (ไม่มี permadeath)",
       ...craftRules(),
+      ...qidianRules(),
       "",
       "รูปแบบคำตอบ (สำคัญมาก):",
       "- เล่าเรื่องก่อน จากนั้นขึ้นบรรทัดใหม่แล้วพิมพ์ <<STATE>> ตามด้วย JSON บรรทัดเดียว ห้ามใส่ markdown fence",
@@ -764,6 +776,15 @@
       const before = statusSnapshot();
       if (reply.state) applyStatePatch(reply.state);
       const after = statusSnapshot();
+
+      // โหมด Qidian: ตรวจตอนที่เพิ่งได้มาในเครื่อง (ไม่เสียโควตา) แล้วเก็บผลไว้
+      // ยัดกลับเข้า prompt ของตอนถัดไปเป็นหัวข้อ "ต้องแก้ให้ได้ในตอนนี้"
+      if (qidianOn()) {
+        state.qidianNotes = window.QIDIAN.audit(narrative, state).notes;
+        state._lastRealm = state.realm;
+        state._lastRealmProgress = state.realmProgress;
+      }
+
       const diff = opts.isOpening ? [] : statusDiff(before, after);
       if (state.showStatus !== false) {
         const card = renderStatusCard(after, diff);
@@ -1723,6 +1744,7 @@
     $("autoToggle").checked = !!state.autoPlay;
     $("fxToggle").checked = state.fx !== false;
     $("statusToggle").checked = state.showStatus !== false;
+    $("qidianToggle").checked = !!state.qidian;
     $("realmText").textContent = state.realm || "-";
     $("realmBar").style.width = Math.max(0, Math.min(100, state.realmProgress || 0)) + "%";
     $("realmPct").textContent = (state.realmProgress || 0) + "%";
@@ -2055,6 +2077,10 @@
       () => "ระดับภาษาอังกฤษ: " + CEFR_LABELS[state.cefr]);
     optChange("fxToggle", () => { state.fx = $("fxToggle").checked; },
       () => "เอฟเฟคฉากบู้: " + (state.fx ? "เปิด" : "ปิด"));
+    optChange("qidianToggle", () => {
+      state.qidian = $("qidianToggle").checked;
+      if (!state.qidian) state.qidianNotes = [];
+    }, () => "โหมด Qidian: " + (state.qidian ? "เปิด — บังคับจังหวะเว็บโนเวลจีน" : "ปิด"));
     $("autoToggle").onchange = async () => {
       state.autoPlay = $("autoToggle").checked;
       updateHeader();
