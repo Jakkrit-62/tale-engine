@@ -143,13 +143,20 @@
     <button id="jumpBtn" type="button">↓ ข้อความใหม่</button>
   </div>
 
-  <div class="chips" id="chips">
-    <button data-a="มองไปรอบๆ อย่างละเอียด">👀 มองรอบตัว</button>
-    <button data-a="ตรวจดูกระเป๋าและไอเทมที่มี">🎒 เช็คไอเทม</button>
-    <button data-a="พักและตั้งสติ">🧘 พักผ่อน</button>
-    <button data-a="เดินหน้าต่อไปอย่างระมัดระวัง">🚶 เดินต่อ</button>
-    <button data-a="พูดคุยกับคนที่อยู่ตรงหน้า">💬 พูดคุย</button>
+  <!-- สร้างตอนอัตโนมัติ: AI เขียนนิยายต่อทีละตอนเต็ม (~3000 คำ) พร้อมเลขตอนและชื่อตอน -->
+  <div class="epbar" id="epbar">
+    <button type="button" id="epBtn" class="epgo">📖 สร้างตอนอัตโนมัติ</button>
+    <button type="button" id="epNo" class="epno" title="แตะเพื่อเปลี่ยนเลขตอนถัดไป">ตอนที่ 1</button>
+    <select id="epCount" title="จำนวนตอนที่จะสร้างต่อกัน">
+      <option value="1">1 ตอน</option>
+      <option value="3">3 ตอน</option>
+      <option value="5">5 ตอน</option>
+      <option value="10">10 ตอน</option>
+      <option value="0">ไม่หยุด</option>
+    </select>
+    <button type="button" id="epVoice" class="epvoice" title="อ่านออกเสียงไปด้วย แล้วค่อยเขียนตอนถัดไปเมื่ออ่านจบ">🔇</button>
   </div>
+  <div class="epstat" id="epStat"></div>
 
   <div id="inputbar">
     <textarea id="actionInput" rows="1" placeholder="พิมพ์การกระทำของคุณ…"></textarea>

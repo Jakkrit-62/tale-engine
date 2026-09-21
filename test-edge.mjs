@@ -59,7 +59,7 @@ function mkFetch() {
     if (isSum) return mk(sse([tc("สรุปสั้น")]));
 
     genCalls++; calledModels.push(model);
-    if (mode === "wantedDown" && model === "gemini-flash-latest")
+    if (mode === "wantedDown" && calledModels.length === 1)   // the chosen model, whatever the default is
       return gErr(429, "Quota exceeded for metric: generate_content_free_tier_requests, limit: 0");
     if (mode === "g404") return gErr(404, "models/gemini-3.8-flash is not found for API version v1beta");
     if (mode === "g429zero") return gErr(429, "You exceeded your current quota. Quota exceeded for metric: generate_content_free_tier_requests, limit: 0, model: gemini-2.5-pro",
@@ -266,7 +266,7 @@ check("daily quota explained", /โควตารายวัน/.test(lastErr(
 check("daily quota tries each fallback model once", genCalls === 3, "calls=" + genCalls);
 $("log").querySelectorAll(".msg.err").forEach(e => e.remove());
 mode = "wantedDown"; calledModels = []; const aiB = aiN(); await turn("สลับโมเดล");
-check("model without quota → next model answers in one tap", aiN() === aiB + 1 && errN() === 0 && calledModels[1] === "gemini-3.1-flash-lite",
+check("model without quota → next model answers in one tap", aiN() === aiB + 1 && errN() === 0 && calledModels.length === 2 && calledModels[1] !== calledModels[0],
   calledModels.join(","));
 check("user told which model was used", /สลับไปใช้/.test($("toast").textContent), $("toast").textContent);
 mode = "ok";

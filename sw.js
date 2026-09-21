@@ -1,6 +1,6 @@
 /* Tale Engine service worker — app-shell cache only.
  * Gemini API calls are NEVER cached (network only). */
-const CACHE = "tale-engine-v7";
+const CACHE = "tale-engine-v8";
 const SHELL = [
   "./", "./index.html", "./styles.css", "./app.js", "./qidian-mode/qidian.js", "./manifest.json",
   "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon-maskable-512.png"

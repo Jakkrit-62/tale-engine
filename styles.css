@@ -50,7 +50,7 @@ input[type=text], input[type=number], input[type=password], textarea, select {
   font-size:16px; background:var(--bg-el); color:var(--ink); }
 textarea { resize:vertical; min-height:58px; line-height:1.5; }
 .chiprow { display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; }
-.chiprow button, .chips button {
+.chiprow button {
   background:var(--chip); border:1px solid var(--border); color:var(--ink);
   border-radius:999px; padding:8px 14px; font-size:13px; white-space:nowrap; flex-shrink:0; }
 .chiprow button.active { border-color:var(--accent); background:var(--accent); color:var(--accent-ink); }
@@ -123,7 +123,6 @@ header .icon-btn { background:none; border:none; font-size:22px; padding:4px 2px
 .errbtns button { flex:1; background:var(--chip); border:1px solid var(--border);
   color:var(--ink); border-radius:8px; padding:7px; font-size:12.5px; }
 
-.chips { display:flex; gap:8px; padding:0 14px 8px; overflow-x:auto; flex-shrink:0; }
 #inputbar { display:flex; gap:8px; align-items:flex-end; flex-shrink:0;
   padding:10px 12px calc(10px + env(safe-area-inset-bottom));
   background:var(--bg-el); border-top:1px solid var(--border); }
@@ -265,3 +264,23 @@ mark.vw { background:none; color:inherit; border-bottom:2px dotted var(--accent)
 .autostop { background:var(--danger); color:#fff; border:none; border-radius:999px;
   padding:6px 12px; font-size:12.5px; font-weight:600; flex-shrink:0; }
 .msg.ai.reading.live { border-style:dashed; }
+
+/* ---------- สร้างตอนอัตโนมัติ (แถบล่าง แทนปุ่มคำสั่งด่วนเดิม) ---------- */
+.epbar { display:flex; gap:6px; align-items:center; padding:0 12px 8px; flex-shrink:0; }
+.epbar button, .epbar select { border:1px solid var(--border); background:var(--chip); color:var(--ink);
+  border-radius:999px; font-size:13px; height:36px; flex-shrink:0; }
+.epbar .epgo { flex:1; min-width:0; background:var(--accent); border-color:var(--accent);
+  color:var(--accent-ink); font-weight:600; padding:0 12px; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; }
+.epbar .epgo.running { background:var(--danger); border-color:var(--danger); color:#fff; }
+.epbar .epno { padding:0 10px; white-space:nowrap; }
+.epbar select { width:auto; padding:0 8px; font-size:13px; }
+.epbar .epvoice { width:36px; padding:0; font-size:15px; }
+.epbar .epvoice.on { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+.epbar button:disabled, .epbar select:disabled { opacity:.5; }
+.epstat { display:none; padding:0 14px 6px; font-size:12px; color:var(--dim); flex-shrink:0; }
+.epstat.show { display:block; }
+.msg.ai.episode { max-width:96%; }
+.msg.ai.episode .sent.eph { font-weight:700; font-size:1.12em; color:var(--accent); }
+.msg.ai.episode .sent.eph.now { color:var(--accent-ink); }
+.msgtools .wc { align-self:center; font-size:12px; color:var(--dim); padding:0 4px; }

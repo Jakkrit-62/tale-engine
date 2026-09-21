@@ -148,8 +148,11 @@
     return done + since + 1;
   }
 
-  function rules(state) {
-    const n = chapterNo(state);
+  // opts.episode: เลขตอนจริงจากโหมด "สร้างตอนอัตโนมัติ" ของแอป
+  // (ถ้ามี ใช้เลขนี้แทนการเดาจากจำนวนเทิร์น และหัวตอนต้องเป็น "ตอนที่ N: …")
+  function rules(state, opts) {
+    const ep = (opts && opts.episode) || 0;
+    const n = ep || chapterNo(state);
     const early = n <= 3;
     const r = [
       "",
@@ -171,7 +174,9 @@
       "",
       "ขนบจีน (章回体 — ใช้เท่าที่ทำให้กลิ่นถูก ไม่ใช่ทำให้อืด):",
       "- " + HUIMU.titleForm,
-      "- ขึ้นต้นตอนด้วยบรรทัด \"◇ <ชื่อตอนแบบโคลงคู่>\" แล้วเว้นบรรทัดก่อนเข้าเนื้อเรื่อง",
+      ep
+        ? "- หัวตอนบรรทัดแรกให้เป็น \"ตอนที่ " + n + ": <ชื่อตอนแบบโคลงคู่>\" (ไม่ต้องมี ◇) แล้วเว้นบรรทัดก่อนเข้าเนื้อเรื่อง"
+        : "- ขึ้นต้นตอนด้วยบรรทัด \"◇ <ชื่อตอนแบบโคลงคู่>\" แล้วเว้นบรรทัดก่อนเข้าเนื้อเรื่อง",
       ...HUIMU.devices.map(d => "- " + d),
       "- " + HUIMU.ban,
       "",
@@ -230,7 +235,8 @@
     const paras = body.split(/\n{2,}/).filter(Boolean);
     const ratio = dialogueRatio(body);
     const lastPara = paras[paras.length - 1] || "";
-    const hasTitle = /^◇/.test(body);
+    // "◇ …" ในโหมดเทิร์นปกติ หรือ "ตอนที่ N: …" จากโหมดสร้างตอนอัตโนมัติ
+    const hasTitle = /^(◇|(ตอนที่|chapter)\s*\d+\s*[:：]\s*\S)/i.test(body);
 
     // ตอนสั้นมากๆ (เปิดเรื่อง/ฉากคั่น) สัดส่วนบทสนทนาแกว่งเป็นธรรมดา อย่าเตือนให้รก
     const longEnough = body.length >= 400;

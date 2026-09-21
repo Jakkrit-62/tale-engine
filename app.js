@@ -16,13 +16,23 @@
   const CTX_TRIGGER = 24;       // compress when ctx exceeds this
   const CHAPTER_COMPRESS_AT = 10;
   const CHAPTER_MERGE_COUNT = 5;
+  // Full ~3000-word episodes are ~15k chars each: counting messages alone
+  // would keep 8 whole chapters in every prompt and burn the free per-minute
+  // token quota. Compress by size too, keeping roughly the last 2-3 chapters.
+  const CTX_CHAR_TRIGGER = 90000;
+  const CTX_CHAR_KEEP = 45000;
+
+  // Auto chapters (สร้างตอนอัตโนมัติ)
+  const EP_WORDS = 3000;          // target length of one chapter
+  const EP_MAX_TOKENS = 32768;    // room for ~3000 Thai words + the STATE block
+  const EP_DELAY = 2500;          // pause between chapters (per-minute quota)
 
   // Hard safety budget for the prompt we send (chars, not tokens).
   // Gemini 2.5 Flash has a huge window; this is a sanity ceiling so a
   // runaway state can never lock the game (BUG #2 fix).
   const PROMPT_CHAR_BUDGET = 400000;
 
-  const DEFAULT_MODEL = "gemini-3.1-flash-lite";;
+  const DEFAULT_MODEL = "gemini-3.1-flash-lite";
   // Fallback only — the real list is fetched from the API key itself
   // (ListModels), because which models a key can call varies per account.
   // Model ids from ai.google.dev/gemini-api/docs/models. Free tier is
@@ -146,7 +156,8 @@
   // ============================================================
   // Gemini API
   // ============================================================
-  let settings = { apiKey: "", model: DEFAULT_MODEL, ttsRate: 0.85, ttsPitch: 1, ttsFollow: true };
+  let settings = { apiKey: "", model: DEFAULT_MODEL, ttsRate: 0.85, ttsPitch: 1, ttsFollow: true,
+    epCount: 3, epVoice: false };
 
   function mapTurns(turns) {
     // Gemini wants role "user" | "model"; merge consecutive same-role turns.
@@ -418,6 +429,10 @@
       // โหมด Qidian: บังคับจังหวะเว็บโนเวลจีน (กฎอยู่ใน qidian-mode/qidian.js)
       // ปิดไว้เป็นค่าเริ่มต้น เซฟเก่าจึงเล่นต่อได้เหมือนเดิมทุกประการ
       qidian: false, qidianNotes: [],
+      // Auto chapters: the next chapter number is derived from the log
+      // (highest `ep` + 1), so undo fixes it by itself. epFloor lets the
+      // player start the count higher, e.g. to continue an existing novel.
+      epFloor: 0,
       hp: 20, maxHp: 20, level: 1, xp: 0,
       skills: [], inventory: [],
       location: "", npcs: [], flags: [],
@@ -457,7 +472,8 @@
   const LENGTH_LABELS = { short: "สั้น", medium: "กลาง", long: "ยาว (นิยาย)" };
 
   // The heart of "ให้มันเป็นนิยายจริงๆ": concrete craft rules, not vibes.
-  function craftRules() {
+  function craftRules(opts) {
+    const ep = (opts && opts.episode) || 0;
     const r = [
       "",
       "วิธีเขียนให้เป็นนิยายจริง (สำคัญ — ห้ามข้าม):",
@@ -497,7 +513,11 @@
         "- เน้นความท้าทายระดับสูงสุด ศัตรูต้องฉลาด มีการวางแผนและตลบหลัง",
         "- สถานการณ์ต้องบีบให้แก้ปัญหาเฉพาะหน้า (เช่น พิษ, กับดัก, เวลาจำกัด)",
         "- ตัวเอกต้องค่อยๆ เก่งขึ้นอย่างสมเหตุสมผล ห้ามได้พลังก้าวกระโดดแบบง่ายๆ",
-        "- ชัยชนะทุกครั้งต้องมีราคา และความผิดพลาดต้องมีผลตามมาจริงในตอนถัดไป",
+        "- ชัยชนะทุกครั้งต้องมีราคา และความผิดพลาดต้องมีผลตามมาจริงในตอนถัดไป"
+      );
+    }
+    if (state && (state.autoPlay || ep)) {
+      r.push(
         "",
         "การจบตอนในโหมดออโต้ (แทนที่กฎการจบตอนด้านบน):",
         "- ห้ามจบด้วยคำถามปลายเปิดแบบ \"คุณจะทำอะไรต่อ\" และห้ามถามผู้เล่นทุกกรณี",
@@ -564,26 +584,51 @@
   // เกมต้องเล่นต่อได้ตามปกติ จึงเช็กก่อนทุกครั้งแทนที่จะพึ่งว่ามันมีแน่
   const qidianOn = () => !!(state && state.qidian && window.QIDIAN);
 
-  function qidianRules() {
-    return qidianOn() ? window.QIDIAN.rules(state) : [];
+  function qidianRules(opts) {
+    return qidianOn() ? window.QIDIAN.rules(state, opts) : [];
   }
 
-  function systemRules() {
+  // ---------- Auto chapters ----------
+  const epWord = () => (state && state.lang === "en" ? "Chapter" : "ตอนที่");
+
+  function episodeRules(n) {
+    const head = epWord() + " " + n + ": <ชื่อตอน" + (state.lang === "en" ? "ภาษาอังกฤษ" : "") + ">";
     return [
-      'คุณคือ Game Master ของเกม text-adventure ส่วนตัวแบบเล่นคนเดียว ชื่อ "Tale Engine"',
+      "",
+      "โหมดสร้างตอนอัตโนมัติ — กำลังเขียน \"" + epWord() + " " + n + "\" (หนึ่งตอนเต็มของนิยาย ไม่ใช่หนึ่งเทิร์นของเกม):",
+      "- บรรทัดแรกของคำตอบต้องเป็นหัวตอนเท่านั้น รูปแบบ: " + head + " แล้วเว้น 1 บรรทัดก่อนเริ่มเนื้อเรื่อง",
+      "- ชื่อตอนต้องเฉพาะเจาะจงกับเหตุการณ์ในตอนนี้ ชวนให้อยากอ่าน ไม่สปอยล์ตอนจบ และห้ามซ้ำกับชื่อตอนก่อนๆ",
+      "- ความยาวเป้าหมาย: ประมาณ " + EP_WORDS + " คำ (ไม่น้อยกว่า " + Math.round(EP_WORDS * 0.85) + " คำ) ห้ามรีบจบ",
+      "- โครงตอน: 4-6 ฉากต่อเนื่อง ฉากละราว 500-700 คำ ทุกฉากต้องมีเป้าหมาย อุปสรรค และผลลัพธ์ที่ทำให้สถานการณ์เปลี่ยน " +
+      "คั่นการเปลี่ยนฉากด้วยบรรทัด * * * ได้",
+      "- ตอนต้องมีโครงครบในตัว: เปิดด้วยแรงดึงดูด → ความขัดแย้งไต่ระดับ → จุดพีคของตอน → ปิดด้วยคลิฟแฮงเกอร์ที่พาเข้าตอนถัดไป",
+      "- เริ่มต่อจากเหตุการณ์ล่าสุดทันที ห้ามเล่าซ้ำสิ่งที่เกิดไปแล้ว และห้ามสรุปย้อนหลังยาวๆ ตอนต้นตอน",
+      "- คุณเป็นผู้ตัดสินใจแทนตัวเอกทั้งหมดอย่างสมเหตุสมผลกับบุคลิกและสถานการณ์ ห้ามถามผู้อ่านหรือหยุดรอคำสั่ง",
+      "- ห้ามใส่หมายเหตุผู้เขียน จำนวนคำ หรือข้อความใดๆ นอกเนื้อเรื่อง (ยกเว้นบล็อก <<STATE>> ท้ายสุดตามปกติ)",
+    ];
+  }
+
+  function systemRules(opts) {
+    const ep = (opts && opts.episode) || 0;
+    return [
+      'คุณคือ Game Master ของเกม text-adventure ส่วนตัวแบบเล่นคนเดียว ชื่อ "Tale Engine"' +
+        (ep ? " — ตอนนี้ทำหน้าที่เป็นนักเขียนนิยายมืออาชีพที่เขียนต่อทีละตอนเต็ม" : ""),
       "",
       "กติกาการเล่าเรื่อง:",
       povRule(),
-      "- ความยาว: " + (LENGTH_RULES[state.length] || LENGTH_RULES.short),
+      "- ความยาว: " + (ep
+        ? "หนึ่งตอนเต็ม ประมาณ " + EP_WORDS + " คำ (ดูกฎโหมดสร้างตอนอัตโนมัติด้านล่าง)"
+        : (LENGTH_RULES[state.length] || LENGTH_RULES.short)),
       ...languageRules(),
       "- " + (MODE_RULES[state.mode] || MODE_RULES.rpg),
-      (state.autoPlay
+      (state.autoPlay || ep
         ? "- โหมดออโต้เปิดอยู่: ห้ามหยุดรอผู้เล่น ให้เล่าต่อเนื่องและตัดสินใจแทนตัวเอกเองอย่างสมเหตุสมผล"
         : "- จบทุกครั้งด้วยสถานการณ์ที่ผู้เล่นต้องตัดสินใจต่อ ห้ามเล่าแทนหรือเดาการกระทำของผู้เล่นเอง"),
       "- คุณจะได้รับบทสรุปเนื้อเรื่องเก่า (ความจำระยะยาว) และสถานะโลก/ตัวละครล่าสุด ต้องยึดข้อมูลเหล่านี้เป็นความจริง ห้ามขัดแย้ง",
       "- HP ห้ามต่ำกว่า 0 หรือเกิน maxHp ถ้า HP ถึง 0 ให้บรรยายภาวะวิกฤต/หมดสติ/ต้องพักฟื้น แต่ห้ามจบเกม (ไม่มี permadeath)",
-      ...craftRules(),
-      ...qidianRules(),
+      ...craftRules(opts),
+      ...(ep ? episodeRules(ep) : []),
+      ...qidianRules(opts),
       "",
       "รูปแบบคำตอบ (สำคัญมาก):",
       "- เล่าเรื่องก่อน จากนั้นขึ้นบรรทัดใหม่แล้วพิมพ์ <<STATE>> ตามด้วย JSON บรรทัดเดียว ห้ามใส่ markdown fence",
@@ -647,9 +692,13 @@
     };
   }
 
+  // Memory summaries are "ช่วงความจำ", not "ตอนที่": once chapters carry real
+  // numbers, reusing the same word would tell the AI two different counts.
+  const memLabel = (c) => c.label || ("ความจำช่วงที่ " + c.index);
+
   function chaptersText() {
     if (!state.chapters.length) return "(ยังไม่มีบทสรุปก่อนหน้า — นี่คือช่วงต้นเรื่อง)";
-    return state.chapters.map(c => "[" + (c.label || ("ตอนที่ " + c.index)) + "] " + c.summary).join("\n");
+    return state.chapters.map(c => "[" + memLabel(c) + "] " + c.summary).join("\n");
   }
 
   const KNOWN_WORDS_SENT = 80;
@@ -666,10 +715,11 @@
 
   // Hard budget guard: trims oldest raw ctx until the prompt fits.
   // Guarantees the game can never become permanently unsendable (BUG #2 fix).
-  function buildTurns(actionText) {
+  function buildTurns(actionText, opts) {
     const header = memoryHeader();
     let ctx = state.ctx.slice();
-    const sizeOf = (arr) => bytes(header + JSON.stringify(arr) + actionText + systemRules());
+    const sys = systemRules(opts);
+    const sizeOf = (arr) => bytes(header + JSON.stringify(arr) + actionText + sys);
 
     while (ctx.length > 2 && sizeOf(ctx) > PROMPT_CHAR_BUDGET) ctx = ctx.slice(2);
 
@@ -696,12 +746,14 @@
 
     busy = true;
     setBusyUI(true);
+    const ep = opts.episode || 0;
 
     // Dice is rolled here and SHOWN to the player (was invisible before).
     // It is rendered provisionally and rolled back if the turn fails.
+    // A whole chapter has many decisions in it, so it gets no single roll.
     let sentAction = rawAction;
     let roll = null, diceEl = null;
-    if (state.mode === "dnd" && !opts.isOpening) {
+    if (state.mode === "dnd" && !opts.isOpening && !ep) {
       roll = Math.floor(Math.random() * 20) + 1;
       sentAction = rawAction + "\n[Dice: d20=" + roll + "]";
       diceEl = renderDice(roll);
@@ -710,15 +762,16 @@
     cancelAuto();   // a turn is starting; any pending auto tick is redundant
 
     const bubble = document.createElement("div");
-    bubble.className = "msg ai streaming";
-    bubble.textContent = "…";
+    bubble.className = "msg ai streaming" + (ep ? " episode" : "");
+    bubble.textContent = ep ? "✍️ กำลังเขียน" + epWord() + " " + ep + "…" : "…";
     $("log").appendChild(bubble);
 
     // In auto-play the tool row is created up front so the live reader has a
     // button to drive, and the voice can start on the first finished sentence
     // instead of waiting for the whole turn to land.
     let toolsRow = null, live = null;
-    if (state.autoPlay && ttsSupported()) {
+    const voiced = state.autoPlay || (ep && epRun && epRun.voice);
+    if (voiced && ttsSupported()) {
       toolsRow = aiTools(bubble, "");
       $("log").appendChild(toolsRow);
       live = startLiveRead(bubble, toolsRow.querySelector("button"));
@@ -733,18 +786,26 @@
         ? [{ role: "user", content: "[ตัวละครและโลกที่ผู้เล่นสร้าง]\n" + JSON.stringify({ name: state.name, charDesc: state.charDesc, world: state.world, mode: state.mode }) },
            { role: "assistant", content: "รับทราบ ผมพร้อมเปิดเรื่องแล้ว" },
            { role: "user", content: sentAction }]
-        : buildTurns(sentAction);
+        : buildTurns(sentAction, opts);
 
       const res = await gemini({
-        system: systemRules(),
+        system: systemRules(opts),
         turns,
+        maxTokens: ep ? EP_MAX_TOKENS : undefined,
         signal: currentAbort.signal,
         onStatus: (sec, n) => {
           bubble.textContent = "⏳ โควตาต่อนาทีเต็ม — รอ " + sec + " วินาทีแล้วลองให้อัตโนมัติ (ครั้งที่ " + n + ")…";
         },
         onText: (t) => {
           // hide the machine blocks (and a half-streamed "<<STU…" marker)
-          const vis = t.split(/<<(?:STATE|STUDY)>>/)[0].replace(/<<[A-Z]*>?$/, "");
+          let vis = t.split(/<<(?:STATE|STUDY)>>/)[0].replace(/<<[A-Z]*>?$/, "");
+          if (ep) {
+            // Show (and speak) the heading exactly as it will be saved. Until
+            // the first line is complete we can't tell what it is, so wait.
+            const f = /\n/.test(vis.replace(/^\s+/, "")) ? formatEpisode(vis, ep) : null;
+            if (!f || !f.text) return;
+            vis = f.text;
+          }
           if (reading === live && live) feedLive(live, vis, false);
           else bubble.textContent = vis;
           scrollLog();
@@ -752,7 +813,13 @@
       });
 
       const reply = splitReply(res.text);
-      const narrative = reply.narrative;
+      let narrative = reply.narrative;
+      let epTitle = "";
+      if (ep && narrative) {
+        // one consistent "ตอนที่ N: ชื่อตอน" line on top, whatever the model wrote
+        const f = formatEpisode(narrative, ep);
+        narrative = f.text; epTitle = f.title;
+      }
 
       // BUG #3 fix: an empty narrative is never accepted and never stored.
       if (!narrative) throw apiErr("empty", "AI ตอบมาแต่ไม่มีเนื้อเรื่อง — กดลองใหม่");
@@ -762,12 +829,14 @@
       bubble.classList.remove("streaming");
       const stillLive = (live && reading === live) ? live : null;
       fillNarrative(bubble, narrative, study);
+      const words = ep ? countWords(narrative) : 0;
       if (toolsRow) {
         // reuse the row created for the live reader; rebind it to the final text
         const b = toolsRow.querySelector("button");
         if (b) b.onclick = () => readAloud(bubble, narrative, b);
+        if (words) addWordCount(toolsRow, words);
       } else {
-        $("log").appendChild(aiTools(bubble, narrative));
+        $("log").appendChild(aiTools(bubble, narrative, words));
       }
       // hand the reader the last sentence it was holding back, and close the queue
       if (stillLive) feedLive(stillLive, narrative, true, true);
@@ -793,8 +862,11 @@
 
       // BUG #4 fix: the player's turn is committed to memory only here,
       // after a confirmed good reply. A failed turn leaves nothing behind.
-      state.ctx.push({ role: "user", content: sentAction });
-      state.ctx.push({ role: "assistant", content: narrative });
+      // `ep` rides along on chapter turns so retry can rewrite the same
+      // chapter and memory summaries can say which chapters they cover.
+      const epTag = ep ? { ep } : null;
+      state.ctx.push(Object.assign({ role: "user", content: sentAction }, epTag));
+      state.ctx.push(Object.assign({ role: "assistant", content: narrative }, epTag));
       if (opts.isOpening) {
         pushLog("sys", "✨ เริ่มการผจญภัย");
       } else if (opts.isAuto) {
@@ -806,10 +878,12 @@
       }
       const meta = { status: after, diff };
       if (study) meta.study = study;
+      if (ep) Object.assign(meta, { ep, epTitle, words });
       const aiEntry = pushLog("assistant", narrative, meta);
       if (study) addToNotebook(study.vocab, aiEntry.t);
       state.lastAction = opts.isOpening ? null : rawAction;
       ok = true;
+      if (ep && epRun) epRun.done++;
 
       updateHeader();
       renderDrawer();
@@ -834,9 +908,49 @@
       // When a reader is running, the *end of the read* chains the next turn.
       // Without one (no speech support, or it stopped early), chain from here
       // so auto-play still works as a plain text crawl.
-      if (ok && state && state.autoPlay && !(reading && reading.bubble === bubble)) scheduleAuto();
+      if (ok && state && !(reading && reading.bubble === bubble)) {
+        if (state.autoPlay) scheduleAuto();
+        else if (epRun) scheduleEpisode();
+      }
+      updateEpBar();
     }
     return ok;
+  }
+
+  // "ตอนที่ 7: ชื่อตอน" on the first line, blank line, then the story.
+  // Models drift: markdown headings, bold, a Qidian "◇" couplet line, or no
+  // heading at all — every shape is normalised to the one above.
+  const EP_HEAD = /^(?:#{1,6}\s*)?(?:\*\*|__)?\s*(?:ตอนที่|บทที่|chapter)\s*\d+\s*(?:[:：.\-–—]\s*)?(.*?)\s*(?:\*\*|__)?\s*$/i;
+
+  function formatEpisode(text, n) {
+    const lines = String(text || "").replace(/^\s+/, "").split("\n");
+    let title = "";
+    const m = (lines[0] || "").match(EP_HEAD);
+    if (m) { title = m[1]; lines.shift(); }
+    // a "◇ couplet" line either replaces the heading or follows a bare one
+    while (lines.length && !lines[0].trim()) lines.shift();
+    if (!title && lines.length && /^\s*◇/.test(lines[0])) title = lines.shift();
+    title = title.replace(/^\s*◇\s*/, "").replace(/^[*_"“「『《]+|[*_"”」』》]+$/g, "").trim().slice(0, 120);
+    const body = lines.join("\n").trim();
+    if (!body) return { text: "", title };
+    return { text: epWord() + " " + n + (title ? ": " + title : "") + "\n\n" + body, title };
+  }
+
+  // Word count the way readers count it. Thai has no spaces, so use the
+  // browser's word segmenter when there is one, and a rough estimate if not.
+  function countWords(text) {
+    const s = String(text || "");
+    if (typeof Intl !== "undefined" && Intl.Segmenter) {
+      try {
+        let n = 0;
+        const seg = new Intl.Segmenter(isThai(s) ? "th" : "en", { granularity: "word" });
+        for (const w of seg.segment(s)) if (w.isWordLike) n++;
+        return n;
+      } catch (e) { }
+    }
+    const latin = (s.match(/[A-Za-z0-9'’-]+/g) || []).length;
+    const thai = (s.match(/[฀-๿]/g) || []).length;
+    return latin + Math.round(thai / 4.5);
   }
 
   // Reply layout: narrative, then optional <<STUDY>>{…}, then <<STATE>>{…}.
@@ -984,12 +1098,32 @@
   // ============================================================
   // Memory compression (with guaranteed fallback — BUG #2 fix)
   // ============================================================
-  async function maybeCompress() {
-    if (state.ctx.length <= CTX_TRIGGER) return;
+  const ctxChars = (arr) => arr.reduce((n, m) => n + String(m.content || "").length, 0);
 
-    const overflow = state.ctx.length - CTX_KEEP;
+  // How many of the oldest ctx messages to fold into a summary: by count as
+  // before, or by size once long chapters make even a few messages heavy.
+  // Always an even number, so user/assistant pairs stay together.
+  function compressOverflow() {
+    const ctx = state.ctx;
+    if (ctx.length > CTX_TRIGGER) return ctx.length - CTX_KEEP;
+    if (ctx.length <= 2 || ctxChars(ctx) <= CTX_CHAR_TRIGGER) return 0;
+    let cut = 0;
+    while (ctx.length - cut > 2 && ctxChars(ctx.slice(cut)) > CTX_CHAR_KEEP) cut += 2;
+    return cut;
+  }
+
+  async function maybeCompress() {
+    const overflow = compressOverflow();
+    if (!overflow) return;
+
     const chunk = state.ctx.slice(0, overflow);
     const chunkText = chunk.map(m => (m.role === "user" ? "ผู้เล่น: " : "GM: ") + m.content).join("\n\n");
+    const eps = chunk.map(m => m.ep).filter(Boolean);
+    const epFrom = eps.length ? Math.min.apply(null, eps) : 0;
+    const epTo = eps.length ? Math.max.apply(null, eps) : 0;
+    // a few whole chapters deserve more than the 3-5 sentences of a few turns
+    const n = Math.min(12, 3 + Math.floor(chunkText.length / 8000));
+    const howLong = n <= 3 ? "3-5 ประโยค" : n + "-" + (n + 3) + " ประโยค";
 
     let summary = null;
     try {
@@ -997,8 +1131,9 @@
         system: "คุณเป็นผู้ช่วยสรุปเนื้อเรื่อง ตอบเฉพาะบทสรุป ห้ามเกริ่นนำหรือแสดงความเห็น",
         turns: [{
           role: "user", content:
-            "สรุปช่วงเนื้อเรื่อง text-adventure ต่อไปนี้ให้กระชับ 3-5 ประโยค เป็นภาษาเดียวกับต้นฉบับ " +
+            "สรุปช่วงเนื้อเรื่อง text-adventure ต่อไปนี้ให้กระชับ " + howLong + " เป็นภาษาเดียวกับต้นฉบับ " +
             "เก็บเฉพาะจุดที่มีผลต่อเนื้อเรื่องต่อ (เหตุการณ์หลัก การตัดสินใจ ความสัมพันธ์ที่เปลี่ยน สิ่งที่ค้างคา) " +
+            (epFrom ? "ถ้ามีหลายตอน ให้เรียงตามลำดับตอนและระบุเลขตอนกำกับ " : "") +
             "ตัดคำบรรยายบรรยากาศที่ไม่จำเป็นออก:\n\n" + chunkText
         }],
         temperature: 0.3,
@@ -1009,8 +1144,9 @@
       console.warn("สรุปความจำไม่สำเร็จ:", e);
     }
 
+    const epLabel = epFrom ? { epFrom, epTo, label: epWord() + " " + epFrom + (epTo > epFrom ? "-" + epTo : "") } : null;
     if (summary) {
-      state.chapters.push({ index: state.chapters.length + 1, summary, t: now() });
+      state.chapters.push(Object.assign({ index: state.chapters.length + 1, summary, t: now() }, epLabel));
       state.ctx = state.ctx.slice(overflow);
       renderChapterMark(summary);
       pushLog("chapter", summary);
@@ -1020,11 +1156,11 @@
       const fallback = chunk.filter(m => m.role === "assistant")
         .map(m => m.content.replace(/\s+/g, " ").slice(0, 160))
         .slice(-3).join(" … ");
-      state.chapters.push({
+      state.chapters.push(Object.assign({
         index: state.chapters.length + 1,
         summary: (fallback || "(ช่วงเนื้อเรื่องที่สรุปอัตโนมัติไม่สำเร็จ)"),
         degraded: true, t: now(),
-      });
+      }, epLabel));
       state.ctx = state.ctx.slice(overflow);
       renderSys("⚠️ สรุปความจำอัตโนมัติไม่สำเร็จ — ใช้สรุปสำรองแทน (แก้ไขได้ในเมนู 📖 ความจำ)");
       pushLog("sys", "สรุปความจำอัตโนมัติไม่สำเร็จ ใช้สรุปสำรองแทน");
@@ -1039,7 +1175,7 @@
     if (state.chapters.length <= CHAPTER_COMPRESS_AT) return;
     const oldest = state.chapters.slice(0, CHAPTER_MERGE_COUNT);
     const rest = state.chapters.slice(CHAPTER_MERGE_COUNT);
-    const combined = oldest.map(c => "(" + (c.label || ("ตอนที่ " + c.index)) + ") " + c.summary).join("\n");
+    const combined = oldest.map(c => "(" + memLabel(c) + ") " + c.summary).join("\n");
 
     let arc = null;
     try {
@@ -1059,11 +1195,16 @@
       // Fallback merge: concatenate, truncated. Never leave chapters unbounded.
       arc = oldest.map(c => c.summary).join(" ").replace(/\s+/g, " ").slice(0, 900);
     }
-    state.chapters = [{
-      index: oldest[0].index,
-      label: "รวมตอนที่ " + oldest[0].index + "-" + oldest[oldest.length - 1].index,
-      summary: arc, t: now(),
-    }].concat(rest);
+    const eps = oldest.filter(c => c.epFrom);
+    const merged = { index: oldest[0].index, summary: arc, t: now() };
+    if (eps.length) {
+      merged.epFrom = Math.min.apply(null, eps.map(c => c.epFrom));
+      merged.epTo = Math.max.apply(null, eps.map(c => c.epTo || c.epFrom));
+      merged.label = (state.lang === "en" ? "Chapters " : "รวมตอนที่ ") + merged.epFrom + "-" + merged.epTo;
+    } else {
+      merged.label = "รวมความจำช่วงที่ " + oldest[0].index + "-" + oldest[oldest.length - 1].index;
+    }
+    state.chapters = [merged].concat(rest);
   }
 
   // ============================================================
@@ -1219,6 +1360,13 @@
       .map((seg, i) => '<span class="sent" data-si="' + i + '">' + seg.join("") + "</span>")
       .join("");
     el._study = study;
+    // chapter heading = every sentence span up to the first line break
+    if (el.classList.contains("episode")) {
+      for (const sp of el.querySelectorAll(".sent")) {
+        sp.classList.add("eph");
+        if (sp.textContent.indexOf("\n") >= 0) break;
+      }
+    }
   }
 
   // ---------- Read aloud (browser speech synthesis, no API quota) ----------
@@ -1312,12 +1460,21 @@
     updateJumpPill();
     // a pending auto tick belongs to the read that just died
     cancelAuto(opts && opts.userStop ? { off: true } : null);
+    // Stopping the voice during a chapter run keeps the writing going,
+    // just silently — the chapters are what the player asked for.
+    if (opts && opts.userStop && epRun && epRun.voice) {
+      epRun.voice = false;
+      updateEpBar();
+      scheduleEpisode();
+    }
   }
 
   function finishReading(r) {
     const chain = !!(state && state.autoPlay);
+    const chainEp = !chain && !!(epRun && epRun.voice);
     stopReading();
     if (chain) scheduleAuto();
+    else if (chainEp) scheduleEpisode();
   }
 
   // Speak the chunk at r.i, then the next, and so on. A *live* session can
@@ -1525,17 +1682,173 @@
     runAutoTurn();
   }
 
-  // Row under each story bubble; hidden where the browser can't speak.
-  function aiTools(bubble, text) {
+  // ============================================================
+  // สร้างตอนอัตโนมัติ — press once, get N full chapters
+  // ============================================================
+  // Same engine as Auto Play (write → optionally read aloud → next), but
+  // started from the bottom bar, stops by itself after N chapters, and every
+  // turn is a whole ~3000-word chapter with its number and title.
+  let epRun = null;     // { total (0 = no limit), done, voice }
+  let epTimer = null;
+
+  function nextEpisodeNo() {
+    let max = 0;
+    for (const m of (state ? state.log : [])) if (m.ep > max) max = m.ep;
+    return Math.max(max + 1, (state && state.epFloor) || 1);
+  }
+
+  function episodeAction(n) {
+    const fresh = !state.ctx.length && !state.chapters.length;
+    return "(เขียน" + epWord() + " " + n + " ของนิยายเรื่องนี้" +
+      (fresh ? " — เป็นตอนเปิดเรื่อง แนะนำตัวเอกและโลกผ่านเหตุการณ์ ไม่ใช่การอธิบาย" : " ต่อจากเหตุการณ์ล่าสุดทันที") +
+      " ความยาวประมาณ " + EP_WORDS + " คำ ขึ้นต้นด้วยหัวตอน แล้วเล่าเป็นตอนเต็ม ตัดสินใจแทนตัวเอกเองทั้งหมด)";
+  }
+
+  function updateEpBar() {
+    const btn = $("epBtn");
+    if (!btn) return;
+    const next = state ? nextEpisodeNo() : 1;
+    $("epNo").textContent = epWord() + " " + next;
+    $("epCount").value = String(settings.epCount);
+    const v = $("epVoice");
+    const voiceOn = epRun ? epRun.voice : settings.epVoice;
+    v.textContent = voiceOn ? "🔊" : "🔇";
+    v.classList.toggle("on", !!voiceOn);
+    v.style.display = ttsSupported() ? "" : "none";
+    const st = $("epStat");
+    if (epRun) {
+      const of = epRun.total ? "/" + epRun.total : "";
+      btn.textContent = "⏹ หยุด (" + epRun.done + of + ")";
+      btn.classList.add("running");
+      btn.disabled = false;
+      st.textContent = busy
+        ? "✍️ กำลังเขียน" + epWord() + " " + next + " (~" + EP_WORDS + " คำ) — เสร็จแล้ว " + epRun.done + of + " ตอน"
+        : (epRun.voice && reading ? "🔊 กำลังอ่าน — อ่านจบแล้วจะเขียน" + epWord() + " " + next + " ต่อ"
+          : "⏳ เตรียมเขียน" + epWord() + " " + next + "…");
+      st.classList.add("show");
+    } else {
+      btn.textContent = "📖 สร้างตอนอัตโนมัติ";
+      btn.classList.remove("running");
+      btn.disabled = busy;
+      st.classList.remove("show");
+    }
+    $("epNo").disabled = !!epRun || busy;
+    $("epCount").disabled = !!epRun;
+  }
+
+  function startEpisodes() {
+    if (!state || busy || epRun) return;
+    if (!settings.apiKey) { openSettings(); toast("ตั้งค่า API key ก่อน"); return; }
+    if (state.autoPlay) cancelAuto({ off: true });   // one hands-free loop at a time
+    stopReading();
+    epRun = { total: settings.epCount, done: 0, voice: !!(settings.epVoice && ttsSupported()) };
+    const msg = "📖 เริ่มสร้างตอนอัตโนมัติ " + (epRun.total ? epRun.total + " ตอน" : "แบบไม่หยุด") +
+      " ตั้งแต่" + epWord() + " " + nextEpisodeNo() + (epRun.voice ? " พร้อมอ่านออกเสียง" : "");
+    renderSys(msg);
+    pushLog("sys", msg);
+    updateHeader();
+    runEpisode();
+  }
+
+  function scheduleEpisode() {
+    clearTimeout(epTimer); epTimer = null;
+    if (!epRun || !state) return;
+    if (epRun.total && epRun.done >= epRun.total) {
+      stopEpisodes("✅ สร้างครบ " + epRun.done + " ตอนแล้ว");
+      return;
+    }
+    updateEpBar();
+    if (busy) return;   // the turn in flight schedules again when it lands
+    epTimer = setTimeout(() => { epTimer = null; runEpisode(); }, EP_DELAY);
+  }
+
+  async function runEpisode() {
+    if (!epRun || !state || busy) return;
+    const n = nextEpisodeNo();
+    const ok = await takeTurn(episodeAction(n), { isAuto: true, episode: n });
+    // like Auto Play: a failed chapter ends the run instead of hammering a
+    // dead key or an empty quota; the red box still offers 🔄 ลองใหม่
+    if (!ok && epRun) {
+      stopEpisodes("⏹️ หยุดสร้างตอนอัตโนมัติ — ตอนล่าสุดไม่สำเร็จ (เขียนเสร็จแล้ว " + epRun.done + " ตอน)");
+    }
+  }
+
+  function stopEpisodes(msg) {
+    clearTimeout(epTimer); epTimer = null;
+    if (!epRun) return;
+    epRun = null;
+    if (msg && state) {
+      renderSys(msg);
+      pushLog("sys", msg);
+      persist(true);
+    }
+    if (state) updateHeader();
+    updateEpBar();
+  }
+
+  function bindEpisodes() {
+    $("epBtn").onclick = () => {
+      if (!epRun) { startEpisodes(); return; }
+      if (busy) {
+        // don't throw away a half-written chapter: finish it, then stop
+        epRun.total = epRun.done + 1;
+        toast("จะหยุดหลังเขียนตอนนี้เสร็จ — กด ■ ถ้าต้องการยกเลิกทันที", 4000);
+        updateEpBar();
+        return;
+      }
+      stopEpisodes("⏹️ หยุดสร้างตอนอัตโนมัติแล้ว");
+    };
+    $("epCount").onchange = async () => {
+      settings.epCount = Math.max(0, parseInt($("epCount").value, 10) || 0);
+      try { await setSetting("epCount", String(settings.epCount)); } catch (e) { }
+    };
+    $("epVoice").onclick = async () => {
+      if (epRun) {
+        epRun.voice = !epRun.voice;
+        if (!epRun.voice && reading) stopReading();
+      }
+      settings.epVoice = epRun ? epRun.voice : !settings.epVoice;
+      try { await setSetting("epVoice", settings.epVoice ? "1" : "0"); } catch (e) { }
+      toast(settings.epVoice ? "🔊 อ่านออกเสียงแต่ละตอน แล้วค่อยเขียนตอนถัดไปเมื่ออ่านจบ" : "🔇 เขียนต่อกันโดยไม่อ่านออกเสียง");
+      updateEpBar();
+      if (epRun && !epRun.voice) scheduleEpisode();
+    };
+    $("epNo").onclick = async () => {
+      if (!state || epRun || busy) return;
+      let floor = 1;   // can't go below a chapter that already exists
+      for (const m of state.log) if (m.ep >= floor) floor = m.ep + 1;
+      const v = prompt("เริ่มนับตอนถัดไปเป็นตอนที่เท่าไร? (ต่ำสุด " + floor + ")", String(nextEpisodeNo()));
+      if (v == null) return;
+      const n = parseInt(v, 10);
+      if (!(n >= floor)) { toast("เลขตอนต้องเป็นตัวเลขตั้งแต่ " + floor + " ขึ้นไป"); return; }
+      state.epFloor = n;
+      await persist(true);
+      updateEpBar();
+      toast("ตอนถัดไปคือ" + epWord() + " " + n);
+    };
+  }
+
+  // Row under each story bubble: 🔊 where the browser can speak, and the
+  // word count under generated chapters.
+  function aiTools(bubble, text, words) {
     const row = document.createElement("div");
     row.className = "msgtools";
-    if (!ttsSupported()) return row;
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = "🔊 ฟังตอนนี้";
-    btn.onclick = () => readAloud(bubble, text, btn);
-    row.appendChild(btn);
+    if (ttsSupported()) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = "🔊 ฟังตอนนี้";
+      btn.onclick = () => readAloud(bubble, text, btn);
+      row.appendChild(btn);
+    }
+    if (words) addWordCount(row, words);
     return row;
+  }
+
+  function addWordCount(row, words) {
+    const wc = document.createElement("span");
+    wc.className = "wc";
+    wc.textContent = "📝 ≈" + words.toLocaleString("en-US") + " คำ";
+    row.appendChild(wc);
   }
 
   // Single place that writes the speed: keeps slider, label, storage and any
@@ -1697,14 +2010,14 @@
     $("actionInput").disabled = b;
     $("stopBtn").style.display = b ? "block" : "none";
     $("sendBtn").style.display = b ? "none" : "block";
-    document.querySelectorAll("#chips button").forEach(x => x.disabled = b);
+    updateEpBar();
   }
 
   function updateHeader() {
     $("headerTitle").textContent = state.title || state.name;
-    $("headerHp").textContent = (state.autoPlay ? "▶️ ออโต้ · " : "") +
+    $("headerHp").textContent = (state.autoPlay ? "▶️ ออโต้ · " : epRun ? "📖 สร้างตอน · " : "") +
       "❤️ " + state.hp + "/" + state.maxHp + " · Lv." + state.level;
-    $("autoStopBtn").style.display = state.autoPlay ? "block" : "none";
+    $("autoStopBtn").style.display = (state.autoPlay || epRun) ? "block" : "none";
   }
 
   function memSize() {
@@ -1785,14 +2098,14 @@
     for (const m of state.log.slice(renderFrom)) {
       const el = document.createElement("div");
       if (m.role === "user") el.className = "msg user";
-      else if (m.role === "assistant") el.className = "msg ai";
+      else if (m.role === "assistant") el.className = "msg ai" + (m.ep ? " episode" : "");
       else if (m.role === "chapter") { el.className = "msg chapter"; el.textContent = "📖 บันทึกความทรงจำ: " + m.content; l.appendChild(el); continue; }
       else if (m.role === "dice") el.className = "msg dice";
       else el.className = "msg sys";
       if (m.role === "assistant") {
         fillNarrative(el, m.content, m.study);
         l.appendChild(el);
-        l.appendChild(aiTools(el, m.content));
+        l.appendChild(aiTools(el, m.content, m.words));
         if (m.study) l.appendChild(renderStudyCard(m.study));
         if (state.showStatus !== false && m.status) {
           const card = renderStatusCard(m.status, m.diff);
@@ -1806,6 +2119,7 @@
     updateHeader();
     applyInputHint();
     renderDrawer();
+    updateEpBar();
     if (!showAll) scrollLog(true);
   }
 
@@ -1941,16 +2255,16 @@
     $("stopBtn").onclick = () => { if (currentAbort) currentAbort.abort(); };
     // one big obvious brake for the hands-free loop
     $("autoStopBtn").onclick = () => {
+      const wasEp = !!epRun;
+      stopEpisodes();
       cancelAuto({ off: true });
       stopReading();
       if (currentAbort) currentAbort.abort();
-      renderSys("⏹️ หยุด Auto Play แล้ว");
-      pushLog("sys", "หยุด Auto Play");
+      const msg = wasEp ? "หยุดสร้างตอนอัตโนมัติ" : "หยุด Auto Play";
+      renderSys("⏹️ " + msg + " แล้ว");
+      pushLog("sys", msg);
       persist(true);
     };
-    document.querySelectorAll("#chips button").forEach(b => {
-      b.onclick = () => { $("actionInput").value = b.dataset.a; send(); };
-    });
     // tap a highlighted word in the story → its Thai meaning
     $("log").addEventListener("click", (e) => {
       const mk = e.target.closest && e.target.closest("mark.vw");
@@ -1986,13 +2300,16 @@
       const lastUserIdx = findLastIndex(state.ctx, m => m.role === "user");
       if (lastUserIdx < 0) { toast("ยังไม่มีเทิร์นให้ลองใหม่"); return; }
       const lastUser = state.ctx[lastUserIdx];
+      stopEpisodes();
       // drop the assistant reply that followed
       state.ctx = state.ctx.slice(0, lastUserIdx);
       dropLastTurnLog(false);
       const raw = (state.lastAction || lastUser.content).replace(/\n\[Dice: d20=\d+\]$/, "");
       closeDrawer();
       renderAll();
-      await takeTurn(raw, { isRetry: false });
+      // a chapter is rewritten as the same chapter, at full length
+      if (lastUser.ep) await takeTurn(episodeAction(lastUser.ep), { isAuto: true, episode: lastUser.ep });
+      else await takeTurn(raw, { isRetry: false, isAuto: raw === AUTO_ACTION });
     };
 
     $("undoBtn").onclick = async () => {
@@ -2000,6 +2317,7 @@
       if (!confirm("ย้อนกลับ 1 เทิร์น? (ลบคำสั่งล่าสุดและคำตอบของ AI)")) return;
       const lastUserIdx = findLastIndex(state.ctx, m => m.role === "user");
       if (lastUserIdx < 0) { toast("ไม่มีเทิร์นให้ย้อน"); return; }
+      stopEpisodes();
       state.ctx = state.ctx.slice(0, lastUserIdx);
       dropLastTurnLog(false);
       closeDrawer();
@@ -2012,15 +2330,26 @@
     for (let i = arr.length - 1; i >= 0; i--) if (fn(arr[i])) return i;
     return -1;
   }
-  // Remove the trailing turn group from the display log:
-  // everything back to and including the most recent user entry.
+  // Remove the trailing turn group from the display log: the latest story
+  // reply, everything after it, and the dice/user entries that opened it.
+  // Auto Play and chapter turns have no user entry, so searching back for
+  // "user" alone would wipe every auto turn since the player last typed
+  // (while ctx only lost one).
   function dropLastTurnLog(keepUser) {
-    const idx = findLastIndex(state.log, m => m.role === "user");
+    let idx = findLastIndex(state.log, m => m.role === "assistant");
+    if (idx < 0) idx = findLastIndex(state.log, m => m.role === "user");
+    if (idx < 0) { state.vocab = []; state.log.length = 0; return; }
+    let userAt = -1;
+    while (idx > 0) {
+      const prev = state.log[idx - 1].role;
+      if (prev === "user" && userAt < 0) { idx--; userAt = idx; continue; }
+      if (prev === "dice") { idx--; continue; }
+      break;
+    }
     // words learned in the dropped turn leave the notebook with it
-    const cutoff = idx < 0 ? 0 : state.log[idx].t;
+    const cutoff = state.log[idx].t;
     state.vocab = state.vocab.filter(v => v.t < cutoff);
-    if (idx < 0) { state.log.length = 0; return; }
-    state.log.length = keepUser ? idx + 1 : idx;
+    state.log.length = (keepUser && userAt >= 0) ? userAt + 1 : idx;
   }
 
   // ============================================================
@@ -2086,6 +2415,7 @@
       updateHeader();
       await persist(true);
       if (state.autoPlay) {
+        stopEpisodes("⏹️ หยุดสร้างตอนอัตโนมัติ — สลับไปใช้ Auto Play");
         renderSys("▶️ Auto Play (Hardcore) เปิดแล้ว — AI จะเล่าและอ่านต่อเองจนกว่าจะกดหยุด");
         pushLog("sys", "เปิด Auto Play (Hardcore)");
         closeDrawer();
@@ -2133,6 +2463,7 @@
     $("settingsBtn").onclick = openSettings;
     $("newGameBtn").onclick = async () => {
       if (!confirm("เริ่มการผจญภัยใหม่? (เกมปัจจุบันยังถูกเก็บไว้ใน 'เกมที่บันทึกไว้')")) return;
+      stopEpisodes();
       state = null;
       closeDrawer();
       resetSetupForm();
@@ -2224,7 +2555,7 @@
         card.className = "chapcard";
         const h = document.createElement("div");
         h.className = "chaphead";
-        h.innerHTML = "<b>" + esc(c.label || ("ตอนที่ " + c.index)) + "</b>" +
+        h.innerHTML = "<b>" + esc(memLabel(c)) + "</b>" +
           (c.degraded ? ' <span class="warnpill">สรุปสำรอง</span>' : "");
         const ta = document.createElement("textarea");
         ta.value = c.summary;
@@ -2336,6 +2667,13 @@
     lines.push("");
     for (const m of state.log) {
       if (m.role === "user") lines.push("**▶ " + m.content + "**", "");
+      else if (m.role === "assistant" && m.ep) {
+        // "ตอนที่ N: ชื่อตอน" becomes a real heading in the exported novel
+        const nl = m.content.indexOf("\n");
+        lines.push("## " + (nl < 0 ? m.content : m.content.slice(0, nl)).trim(), "");
+        if (nl >= 0) lines.push(m.content.slice(nl).trim(), "");
+        if (m.study) lines.push(...studyToMarkdown(m.study));
+      }
       else if (m.role === "assistant") {
         lines.push(m.content, "");
         if (m.study) lines.push(...studyToMarkdown(m.study));
@@ -2388,6 +2726,8 @@
         const restored = defaultState(obj);
         restored.id = uid(); // import as a new slot, never overwrite
         restored.title = (restored.title || restored.name) + " (นำเข้า)";
+        restored.autoPlay = false;
+        stopEpisodes();
         await dbPut(STORE_SAVES, restored);
         state = restored;
         await setSetting("lastSave", state.id);
@@ -2428,6 +2768,7 @@
       load.disabled = !!(state && s.id === state.id);
       load.onclick = async () => {
         if (busy) { toast("รอให้เทิร์นปัจจุบันจบก่อน"); return; }
+        stopEpisodes();
         await persist(true);
         state = defaultState(s);
         await setSetting("lastSave", state.id);
@@ -2452,6 +2793,7 @@
   }
   function bindSlots() {
     $("slotNew").onclick = () => {
+      stopEpisodes();
       closeModals(); closeDrawer();
       state = null; resetSetupForm(); show("setup");
     };
@@ -2562,11 +2904,15 @@
     settings.ttsRate = clampRate(await getSetting("ttsRate", "0.85"));
     settings.ttsPitch = 1;
     settings.ttsFollow = String(await getSetting("ttsFollow", "1")) !== "0";
+    const epc = parseInt(await getSetting("epCount", "3"), 10);
+    settings.epCount = [0, 1, 3, 5, 10].indexOf(epc) >= 0 ? epc : 3;
+    settings.epVoice = String(await getSetting("epVoice", "0")) === "1";
     const savedList = await getSetting("modelList", null);
     if (Array.isArray(savedList) && savedList.length) modelList = savedList;
 
     bindSetup(); bindInput(); bindDrawer(); bindTurnTools(); bindScrollFollow();
     bindStateEditor(); bindChapters(); bindExport(); bindSlots(); bindSettings(); bindVocab();
+    bindEpisodes();
 
     // Chrome loads voices lazily; ask early so the first 🔊 gets a good one
     if (ttsSupported() && window.speechSynthesis.getVoices) window.speechSynthesis.getVoices();
