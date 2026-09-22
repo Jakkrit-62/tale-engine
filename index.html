@@ -485,6 +485,23 @@
   <div class="modalbox">
     <div class="modalhead"><b>⚙️ ตั้งค่า</b><button data-close class="x">✕</button></div>
     <div class="modalbody">
+      <label class="lbl">ผู้ให้บริการ AI หลัก</label>
+      <select id="providerSelect">
+        <option value="gemini">Gemini (Google) — มีโควตาฟรี</option>
+        <option value="deepseek">DeepSeek — จ่ายตามใช้ ราคาถูก</option>
+      </select>
+      <label class="lbl">ถ้าเจ้าหลักใช้ไม่ได้ (เช่น 503 คนใช้เยอะ / โควตาหมด)</label>
+      <select id="fallbackSelect">
+        <option value="ask">ถามก่อนว่าจะใช้อีกเจ้าไหม</option>
+        <option value="auto">สลับไปอีกเจ้าให้เลย ไม่ต้องถาม</option>
+        <option value="off">ไม่สลับ — แสดงข้อผิดพลาด</option>
+      </select>
+      <div id="providerNote" class="note" style="display:none">
+        <span id="providerNoteText"></span>
+        <button type="button" id="providerNoteReset" class="lnk">กลับไปใช้เจ้าหลัก</button>
+      </div>
+
+      <div class="provhead">✨ Gemini</div>
       <label class="lbl">Gemini API key</label>
       <div class="keyrow">
         <input type="password" id="apiKeyInput" placeholder="วาง API key ที่นี่" autocomplete="off" spellcheck="false">
@@ -509,6 +526,26 @@
         <button id="saveKeyBtn" class="primary">บันทึก</button>
       </div>
       <button id="clearKeyBtn" class="danger full" style="margin-top:8px">🗑️ ลบ API key ออกจากเครื่อง</button>
+
+      <div class="provhead">🐋 DeepSeek</div>
+      <label class="lbl">DeepSeek API key</label>
+      <div class="keyrow">
+        <input type="password" id="dsKeyInput" placeholder="sk-… (เว้นว่างได้ ถ้าไม่ใช้)" autocomplete="off" spellcheck="false">
+        <button id="dsToggleKeyBtn" class="ghost sq">👁️</button>
+      </div>
+      <div id="dsKeyStatus" class="keystat warn">⚠️ ยังไม่ได้ตั้งค่า</div>
+      <label class="lbl">โมเดล DeepSeek</label>
+      <select id="dsModelSelect"></select>
+      <div class="note">
+        สมัครและเติมเงินที่ <b>platform.deepseek.com</b> → API keys → Create — DeepSeek <b>ไม่มีโควตาฟรี</b>
+        ต้องเติมเงินก่อน (หลักสิบบาทก็เขียนได้หลายตอน) · <b>R1</b> คิดก่อนเขียน ตอบช้ากว่าแต่วางเรื่องดี
+        · <b>V3</b> เร็วและถูกกว่า · key เก็บในเครื่องนี้เท่านั้น ส่งตรงไป DeepSeek
+      </div>
+      <div class="row2" style="margin-top:14px">
+        <button id="dsTestBtn" class="ghost">🔌 ทดสอบ DeepSeek</button>
+        <button id="dsSaveBtn" class="primary">บันทึก</button>
+      </div>
+      <button id="dsClearBtn" class="danger full" style="margin-top:8px">🗑️ ลบ DeepSeek key</button>
     </div>
   </div>
 </div>
@@ -594,6 +631,19 @@
       <div class="sm dim" id="vocabInfo" style="margin:8px 0"></div>
       <div id="vocabList"></div>
       <button id="vocabCsv" class="ghost full" style="margin-top:12px">⬇️ ดาวน์โหลด .csv (ใช้กับ Anki / Excel)</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="switchModal">
+  <div class="modalbox">
+    <div class="modalhead"><b>⚠️ <span id="swTitle"></span></b></div>
+    <div class="modalbody">
+      <div id="swMsg" class="sm"></div>
+      <button type="button" id="swOnce" class="primary full"></button>
+      <button type="button" id="swSession" class="ghost full"></button>
+      <button type="button" id="swNo" class="ghost full">ไม่ต้อง — แสดงข้อผิดพลาด</button>
+      <div class="note">ตั้งเจ้าหลัก หรือให้สลับเองโดยไม่ต้องถาม ได้ที่ ⚙️ ตั้งค่า</div>
     </div>
   </div>
 </div>

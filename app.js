@@ -171,7 +171,9 @@
   // Gemini API
   // ============================================================
   let settings = { apiKey: "", model: DEFAULT_MODEL, ttsRate: 0.85, ttsPitch: 1, ttsFollow: true,
-    epCount: 3, epVoice: false, trTo: "auto" };
+    epCount: 3, epVoice: false, trTo: "auto",
+    // AI provider: main one + what to do when it fails ("ask" | "auto" | "off")
+    provider: "gemini", dsKey: "", dsModel: "deepseek-reasoner", fallback: "ask" };
 
   function mapTurns(turns) {
     // Gemini wants role "user" | "model"; merge consecutive same-role turns.
@@ -438,6 +440,213 @@
       throw apiErr("empty", "AI ไม่ได้ตอบอะไรกลับมา ลองใหม่อีกครั้ง");
     }
     return { text: full, finishReason };
+  }
+
+  // ============================================================
+  // DeepSeek API (OpenAI-compatible, pay-as-you-go, CORS allowed)
+  // ============================================================
+  const DS_API = "https://api.deepseek.com/";
+  const DS_DEFAULT_MODEL = "deepseek-reasoner";
+  const DS_MODELS = [
+    { id: "deepseek-reasoner", label: "DeepSeek R1 — คิดก่อนตอบ (deepseek-reasoner)" },
+    { id: "deepseek-chat", label: "DeepSeek V3 — เร็ว ประหยัดกว่า (deepseek-chat)" },
+  ];
+  // output caps per model (R1's includes its thinking)
+  const dsMaxOut = (m) => /reasoner/.test(m) ? 32768 : 8192;
+
+  function dsMessages(system, turns) {
+    const out = [];
+    if (system) out.push({ role: "system", content: system });
+    for (const t of turns) {
+      const role = t.role === "assistant" ? "assistant" : "user";
+      const text = String(t.content || "").trim();
+      if (!text) continue;
+      const last = out[out.length - 1];
+      if (last && last.role === role) last.content += "\n\n" + text;   // R1 rejects same-role runs
+      else out.push({ role, content: text });
+    }
+    const first = out.findIndex(m => m.role !== "system");
+    if (first >= 0 && out[first].role === "assistant") out.splice(first, 0, { role: "user", content: "(เริ่มเรื่อง)" });
+    if (!out.length || out[out.length - 1].role !== "user") out.push({ role: "user", content: "(ดำเนินเรื่องต่อ)" });
+    return out;
+  }
+
+  async function dsError(res) {
+    let msg = "";
+    try { const j = await res.json(); msg = String((j.error && j.error.message) || ""); } catch (e) { }
+    const s = res.status;
+    if (s === 401) return apiErr("bad_key", "DeepSeek API key ไม่ถูกต้อง");
+    if (s === 402) return apiErr("no_balance", "ยอดเงินใน DeepSeek หมด — เติมเงินที่ platform.deepseek.com");
+    if (s === 429) { const e = apiErr("rate_limited", "เรียก DeepSeek ถี่เกินไป — รอสักครู่แล้วลองใหม่"); e.transient = true; return e; }
+    if (s === 503) { const e = apiErr("overloaded", "เซิร์ฟเวอร์ DeepSeek มีคนใช้เยอะ — รอสักครู่แล้วลองใหม่"); e.transient = true; return e; }
+    if (s >= 500) { const e = apiErr("server", "เซิร์ฟเวอร์ DeepSeek ขัดข้อง ลองใหม่อีกครั้ง"); e.transient = true; return e; }
+    return apiErr(s === 400 || s === 422 ? "bad_request" : "http_" + s, "DeepSeek: " + (msg || "HTTP " + s));
+  }
+
+  async function deepseek({ system, turns, onText, onStatus, temperature, maxTokens, signal, model, quiet }) {
+    if (!settings.dsKey) throw apiErr("no_key", "ยังไม่ได้ตั้งค่า DeepSeek API key");
+    const m = model && /^deepseek/.test(model) ? model : (settings.dsModel || DS_DEFAULT_MODEL);
+    const body = {
+      model: m,
+      messages: dsMessages(system, turns),
+      stream: true,
+      max_tokens: Math.min(maxTokens || 8192, dsMaxOut(m)),
+    };
+    if (!/reasoner/.test(m)) body.temperature = temperature == null ? 0.9 : temperature;   // R1 ignores it
+
+    let res;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        res = await fetch(DS_API + "chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + settings.dsKey },
+          body: JSON.stringify(body),
+          signal,
+        });
+      } catch (e) {
+        if (e && e.name === "AbortError") throw apiErr("aborted", "ยกเลิกแล้ว");
+        throw apiErr("network", "เชื่อมต่อ DeepSeek ไม่ได้ — ตรวจสอบอินเทอร์เน็ต");
+      }
+      if (res.ok) break;
+      const err = await dsError(res);
+      if (err.transient && attempt < 1 && !quiet) {
+        if (onStatus) onStatus(3, attempt + 1, "busy");
+        await waitFor(3000, signal);
+        continue;
+      }
+      throw err;
+    }
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "", full = "", finish = null, thinking = false;
+    while (true) {
+      let chunk;
+      try { chunk = await reader.read(); }
+      catch (e) {
+        if (e && e.name === "AbortError") throw apiErr("aborted", "ยกเลิกแล้ว");
+        throw apiErr("network", "การเชื่อมต่อหลุดระหว่างรับข้อมูล");
+      }
+      if (chunk.done) break;
+      buf += dec.decode(chunk.value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop();
+      for (const line of lines) {
+        const s = line.trim();
+        if (!s.startsWith("data:")) continue;          // ": keep-alive" and blanks
+        const payload = s.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        let j;
+        try { j = JSON.parse(payload); } catch (e) { continue; }
+        const c = j.choices && j.choices[0];
+        if (!c) continue;
+        if (c.finish_reason) finish = c.finish_reason;
+        const d = c.delta || {};
+        // R1 thinks out loud first — never shown, just say it is thinking
+        if (d.reasoning_content && !full && !thinking) { thinking = true; if (onStatus) onStatus(0, 0, "thinking"); }
+        if (typeof d.content === "string" && d.content) {
+          full += d.content;
+          if (onText) onText(full);
+        }
+      }
+    }
+    if (!full.trim()) {
+      if (finish === "content_filter") throw apiErr("blocked", "DeepSeek ไม่ยอมเขียนเนื้อหานี้ ลองเปลี่ยนคำสั่ง");
+      if (finish === "length") throw apiErr("truncated", "DeepSeek ใช้ token หมดตอนคิด — ลองใหม่ หรือเปลี่ยนเป็น DeepSeek V3");
+      throw apiErr("empty", "DeepSeek ไม่ได้ตอบอะไรกลับมา ลองใหม่อีกครั้ง");
+    }
+    return { text: full, finishReason: finish === "length" ? "MAX_TOKENS" : finish === "stop" ? "STOP" : finish };
+  }
+
+  // Key check without spending anything: list models + read the balance.
+  async function dsCheck(key) {
+    let r;
+    try { r = await fetch(DS_API + "models", { headers: { Authorization: "Bearer " + key } }); }
+    catch (e) { throw apiErr("network", "เชื่อมต่อ DeepSeek ไม่ได้ — ตรวจสอบอินเทอร์เน็ต"); }
+    if (!r.ok) throw await dsError(r);
+    const models = ((await r.json()).data || []).map(x => x.id).filter(Boolean);
+    let balance = "";
+    try {
+      const b = await fetch(DS_API + "user/balance", { headers: { Authorization: "Bearer " + key } });
+      if (b.ok) {
+        const j = await b.json();
+        const i = (j.balance_infos || [])[0];
+        if (i) balance = i.total_balance + " " + i.currency;
+        if (j.is_available === false) balance += " (ยอดไม่พอใช้งาน)";
+      }
+    } catch (e) { }
+    return { models, balance };
+  }
+
+  // ============================================================
+  // Provider switch: every AI call goes through llm(). The main provider
+  // is chosen in settings; when it fails, offer (or use) the other one.
+  // ============================================================
+  const PROVIDER_NAME = { gemini: "Gemini", deepseek: "DeepSeek" };
+  let sessionProvider = null;       // "use the other one until the app closes"
+  let pendingSwitch = null;         // resolver of the open ask-dialog
+  const otherProvider = (p) => p === "deepseek" ? "gemini" : "deepseek";
+  const hasKey = (p) => p === "deepseek" ? !!settings.dsKey : !!settings.apiKey;
+  const hasAnyKey = () => hasKey("gemini") || hasKey("deepseek");
+  const mainProvider = () => settings.provider === "deepseek" ? "deepseek" : "gemini";
+  const activeProvider = () => sessionProvider || mainProvider();
+  const providerLabel = (p) => p === "deepseek"
+    ? ((DS_MODELS.find(m => m.id === settings.dsModel) || { label: settings.dsModel || "DeepSeek" }).label.split(" — ")[0])
+    : "Gemini";
+  // failures the other provider can fix (not "you pressed stop" or "that prompt was refused")
+  const OFFER_ON = { overloaded: 1, server: 1, rate_limited: 1, no_quota: 1, no_model: 1, network: 1,
+    no_key: 1, bad_key: 1, forbidden: 1, no_balance: 1, truncated: 1, empty: 1 };
+
+  function callProvider(p, opts) { return p === "deepseek" ? deepseek(opts) : gemini(opts); }
+
+  function askSwitch(from, to, err, signal) {
+    return new Promise((resolve) => {
+      const done = (v) => { if (!pendingSwitch) return; pendingSwitch = null; closeModals(); resolve(v); };
+      pendingSwitch = done;
+      $("swTitle").textContent = PROVIDER_NAME[from] + " ใช้ไม่ได้ตอนนี้";
+      $("swMsg").textContent = (err && err.message ? err.message : "") + " — จะใช้ " + providerLabel(to) + " เขียนต่อแทนไหม?";
+      $("swOnce").textContent = "ใช้ " + providerLabel(to) + " แทน (ครั้งนี้)";
+      $("swSession").textContent = "ใช้ " + providerLabel(to) + " ต่อไปเลย จนกว่าจะปิดแอป";
+      $("swOnce").onclick = () => done("once");
+      $("swSession").onclick = () => done("session");
+      $("swNo").onclick = () => done("no");
+      if (signal) signal.addEventListener("abort", () => done("no"), { once: true });
+      openModal("switchModal");
+    });
+  }
+
+  async function llm(opts) {
+    const first = activeProvider();
+    const alt = otherProvider(first);
+    // no key for the main one at all, but the other is set up: just use it
+    if (!hasKey(first) && hasKey(alt)) return callProvider(alt, opts);
+    try {
+      return await callProvider(first, opts);
+    } catch (e) {
+      const mode = settings.fallback || "ask";
+      if (!OFFER_ON[e.code] || !hasKey(alt) || mode === "off") throw e;
+      if (opts.signal && opts.signal.aborted) throw e;
+      let choice = "once";
+      if (mode === "ask") {
+        if (opts.quiet) throw e;             // background work never pops a question
+        choice = await askSwitch(first, alt, e, opts.signal);
+        if (choice === "no") throw e;
+      }
+      if (choice === "session") { sessionProvider = alt; renderProviderNote(); }
+      if (!opts.quiet) toast("🔀 ใช้ " + providerLabel(alt) + " แทน " + PROVIDER_NAME[first] +
+        (choice === "session" ? " จนกว่าจะปิดแอป" : ""), 3500);
+      if (opts.onSwitch) opts.onSwitch(alt);
+      return callProvider(alt, opts);
+    }
+  }
+
+  function renderProviderNote() {
+    const el = $("providerNote");
+    if (!el) return;
+    if (sessionProvider && sessionProvider !== mainProvider()) {
+      el.style.display = "block";
+      $("providerNoteText").textContent = "ตอนนี้ใช้ " + providerLabel(sessionProvider) + " แทนชั่วคราว (จนกว่าจะปิดแอป)";
+    } else el.style.display = "none";
   }
 
   // ============================================================
@@ -776,7 +985,7 @@
   async function takeTurn(rawAction, opts) {
     opts = opts || {};
     if (busy) return false;
-    if (!settings.apiKey) { openSettings(); toast("ตั้งค่า API key ก่อนเริ่มเล่น"); return false; }
+    if (!hasAnyKey()) { openSettings(); toast("ตั้งค่า API key ก่อนเริ่มเล่น"); return false; }
 
     busy = true;
     setBusyUI(true);
@@ -822,12 +1031,13 @@
            { role: "user", content: sentAction }]
         : buildTurns(sentAction, opts);
 
-      const res = await gemini({
+      const res = await llm({
         system: systemRules(opts),
         turns,
         maxTokens: ep ? EP_MAX_TOKENS : undefined,
         signal: currentAbort.signal,
         onStatus: (sec, n, why) => {
+          if (why === "thinking") { bubble.textContent = "🧠 " + providerLabel("deepseek") + " กำลังคิดก่อนเขียน…"; return; }
           bubble.textContent = (why === "busy"
             ? "⏳ เซิร์ฟเวอร์ Gemini มีคนใช้เยอะ — รอ " + sec + " วินาทีแล้วลองใหม่/สลับโมเดลให้อัตโนมัติ"
             : "⏳ โควตาต่อนาทีเต็ม — รอ " + sec + " วินาทีแล้วลองให้อัตโนมัติ") + " (ครั้งที่ " + n + ")…";
@@ -1164,7 +1374,7 @@
 
     let summary = null;
     try {
-      const res = await gemini({
+      const res = await llm({
         system: "คุณเป็นผู้ช่วยสรุปเนื้อเรื่อง ตอบเฉพาะบทสรุป ห้ามเกริ่นนำหรือแสดงความเห็น",
         turns: [{
           role: "user", content:
@@ -1216,7 +1426,7 @@
 
     let arc = null;
     try {
-      const res = await gemini({
+      const res = await llm({
         system: "คุณเป็นผู้ช่วยสรุปเนื้อเรื่อง ตอบเฉพาะบทสรุป",
         turns: [{
           role: "user", content:
@@ -1775,7 +1985,7 @@
 
   function startEpisodes() {
     if (!state || busy || epRun) return;
-    if (!settings.apiKey) { openSettings(); toast("ตั้งค่า API key ก่อน"); return; }
+    if (!hasAnyKey()) { openSettings(); toast("ตั้งค่า API key ก่อน"); return; }
     if (state.autoPlay) cancelAuto({ off: true });   // one hands-free loop at a time
     stopReading();
     epRun = { total: settings.epCount, done: 0, voice: !!(settings.epVoice && ttsSupported()) };
@@ -2040,7 +2250,7 @@
     };
     row.appendChild(retry);
 
-    if (e && (e.code === "no_key" || e.code === "bad_key" || e.code === "forbidden" || e.code === "no_model" || e.code === "no_quota" || e.code === "rate_limited")) {
+    if (e && (e.code === "no_key" || e.code === "bad_key" || e.code === "forbidden" || e.code === "no_model" || e.code === "no_quota" || e.code === "rate_limited" || e.code === "no_balance")) {
       const st = document.createElement("button");
       st.textContent = "⚙️ ตั้งค่า";
       st.onclick = openSettings;
@@ -2238,7 +2448,7 @@
     });
 
     $("startBtn").onclick = async () => {
-      if (!settings.apiKey) { openSettings(); toast("ตั้งค่า API key ก่อนเริ่มเล่น"); return; }
+      if (!hasAnyKey()) { openSettings(); toast("ตั้งค่า API key ก่อนเริ่มเล่น"); return; }
       const name = $("setupName").value.trim() || "นักผจญภัยไร้นาม";
       state = defaultState({
         name,
@@ -2406,6 +2616,7 @@
 
   function openModal(id) { $(id).classList.add("open"); $("overlay").classList.add("open"); }
   function closeModals() {
+    if (pendingSwitch) { pendingSwitch("no"); return; }   // closing the ask = "no" (it closes the modals itself)
     document.querySelectorAll(".modal").forEach(m => m.classList.remove("open"));
     if (!$("drawer").classList.contains("open")) $("overlay").classList.remove("open");
   }
@@ -3684,7 +3895,88 @@
     fillModelSelect(settings.model || DEFAULT_MODEL);
     $("keyStatus").textContent = settings.apiKey ? "✅ ตั้งค่าแล้ว" : "⚠️ ยังไม่ได้ตั้งค่า";
     $("keyStatus").className = settings.apiKey ? "keystat ok" : "keystat warn";
+    fillProviderSettings();
     openModal("settingsModal");
+  }
+
+  function fillDsModels(current) {
+    const list = DS_MODELS.slice();
+    if (current && !list.some(m => m.id === current)) list.push({ id: current, label: current });
+    $("dsModelSelect").innerHTML = list.map(m => '<option value="' + esc(m.id) + '">' + esc(m.label) + "</option>").join("");
+    $("dsModelSelect").value = current || DS_DEFAULT_MODEL;
+  }
+
+  function fillProviderSettings() {
+    $("providerSelect").value = mainProvider();
+    $("fallbackSelect").value = settings.fallback || "ask";
+    $("dsKeyInput").value = settings.dsKey || "";
+    fillDsModels(settings.dsModel || DS_DEFAULT_MODEL);
+    $("dsKeyStatus").textContent = settings.dsKey ? "✅ ตั้งค่าแล้ว" : "⚠️ ยังไม่ได้ตั้งค่า (ไม่บังคับ)";
+    $("dsKeyStatus").className = settings.dsKey ? "keystat ok" : "keystat warn";
+    renderProviderNote();
+  }
+
+  function bindProvider() {
+    $("providerSelect").onchange = async () => {
+      const p = $("providerSelect").value === "deepseek" ? "deepseek" : "gemini";
+      if (p === "deepseek" && !settings.dsKey && !$("dsKeyInput").value.trim()) toast("ใส่ DeepSeek API key ด้านล่างก่อน แล้วกดบันทึก", 3500);
+      settings.provider = p;
+      sessionProvider = null;
+      renderProviderNote();
+      try { await setSetting("provider", p); } catch (e) { }
+      toast("เจ้าหลัก: " + PROVIDER_NAME[p]);
+    };
+    $("fallbackSelect").onchange = async () => {
+      settings.fallback = $("fallbackSelect").value;
+      try { await setSetting("fallback", settings.fallback); } catch (e) { }
+    };
+    $("providerNoteReset").onclick = () => { sessionProvider = null; renderProviderNote(); toast("กลับไปใช้ " + PROVIDER_NAME[mainProvider()]); };
+    $("dsSaveBtn").onclick = async () => {
+      settings.dsKey = $("dsKeyInput").value.trim();
+      settings.dsModel = $("dsModelSelect").value || DS_DEFAULT_MODEL;
+      await setSetting("dsKey", settings.dsKey);
+      await setSetting("dsModel", settings.dsModel);
+      fillProviderSettings();
+      toast("บันทึกการตั้งค่า DeepSeek แล้ว");
+    };
+    $("dsTestBtn").onclick = async () => {
+      const btn = $("dsTestBtn"), prev = btn.textContent;
+      const key = $("dsKeyInput").value.trim();
+      if (!key) { toast("ใส่ DeepSeek API key ก่อน"); return; }
+      btn.disabled = true; btn.textContent = "กำลังทดสอบ…";
+      try {
+        const r = await dsCheck(key);
+        const want = $("dsModelSelect").value;
+        if (r.models.length) {
+          fillDsModels(want);
+          for (const id of r.models) if (![...$("dsModelSelect").options].some(o => o.value === id)) {
+            $("dsModelSelect").insertAdjacentHTML("beforeend", '<option value="' + esc(id) + '">' + esc(id) + "</option>");
+          }
+          $("dsModelSelect").value = want;
+        }
+        const missing = r.models.length && r.models.indexOf(want) < 0;
+        $("dsKeyStatus").textContent = (missing ? "⚠️ key ใช้ได้ แต่ไม่พบโมเดล " + want + " — เลือกรุ่นอื่น" : "✅ ใช้งานได้") +
+          (r.balance ? " · ยอดคงเหลือ " + r.balance : "") + " — กดบันทึก";
+        $("dsKeyStatus").className = missing ? "keystat warn" : "keystat ok";
+      } catch (e) {
+        $("dsKeyStatus").textContent = "❌ " + (e.message || "ทดสอบไม่ผ่าน");
+        $("dsKeyStatus").className = "keystat warn";
+      }
+      btn.disabled = false; btn.textContent = prev;
+    };
+    $("dsClearBtn").onclick = async () => {
+      if (!confirm("ลบ DeepSeek API key ออกจากเครื่องนี้?")) return;
+      settings.dsKey = "";
+      await setSetting("dsKey", "");
+      if (sessionProvider === "deepseek") sessionProvider = null;
+      fillProviderSettings();
+      toast("ลบ DeepSeek key แล้ว");
+    };
+    $("dsToggleKeyBtn").onclick = () => {
+      const i = $("dsKeyInput");
+      i.type = i.type === "password" ? "text" : "password";
+      $("dsToggleKeyBtn").textContent = i.type === "password" ? "👁️" : "🙈";
+    };
   }
   function bindSettings() {
     $("saveKeyBtn").onclick = async () => {
@@ -3775,6 +4067,10 @@
     settings.epCount = [0, 1, 3, 5, 10].indexOf(epc) >= 0 ? epc : 3;
     settings.epVoice = String(await getSetting("epVoice", "0")) === "1";
     settings.trTo = String(await getSetting("trTo", "auto"));
+    settings.provider = String(await getSetting("provider", "gemini")) === "deepseek" ? "deepseek" : "gemini";
+    settings.dsKey = await getSetting("dsKey", "") || "";
+    settings.dsModel = await getSetting("dsModel", DS_DEFAULT_MODEL) || DS_DEFAULT_MODEL;
+    settings.fallback = await getSetting("fallback", "ask") || "ask";
     const lp = await getSetting("libPrefs", null);
     if (lp && typeof lp === "object") Object.assign(lib, lp, { page: 1 });
     const savedList = await getSetting("modelList", null);
@@ -3784,7 +4080,7 @@
     // the app from opening — log it and carry on with the rest.
     for (const bind of [bindSetup, bindInput, bindDrawer, bindTurnTools, bindScrollFollow,
       bindStateEditor, bindChapters, bindExport, bindLibrary, bindSettings, bindVocab,
-      bindTranslate, bindEpisodes, bindCloud]) {
+      bindTranslate, bindEpisodes, bindCloud, bindProvider]) {
       try { bind(); } catch (e) { console.error("bind " + bind.name + ":", e); }
     }
 
@@ -3814,7 +4110,7 @@
     } else {
       resetSetupForm();
       show("setup");
-      if (!settings.apiKey) setTimeout(openSettings, 400);
+      if (!hasAnyKey()) setTimeout(openSettings, 400);
     }
 
     window.__taleBooted = true;

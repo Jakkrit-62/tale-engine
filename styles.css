@@ -356,3 +356,9 @@ mark.vw { background:none; color:inherit; border-bottom:2px dotted var(--accent)
 .libcloud button { padding:6px 10px; font-size:12.5px; }
 #restoreList .lbl { margin-top:16px; }
 .cloudstat.off { color:var(--dim); }
+
+/* ---------- ผู้ให้บริการ AI ---------- */
+.provhead { font-weight:700; font-size:15px; margin:22px 0 2px; padding-top:14px; border-top:1px solid var(--border); }
+#switchModal .modalbox { border-radius:18px; margin:auto 12px; }
+#switchModal.open { align-items:center; }
+#swMsg { line-height:1.6; margin-bottom:6px; }

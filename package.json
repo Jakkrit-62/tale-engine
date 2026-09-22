@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "prepare": "git config core.hooksPath .githooks",
-    "test": "node test.mjs && node test-edge.mjs && node test-study.mjs && node test-episodes.mjs && node test-library.mjs && node test-cloud.mjs && node test-busy.mjs",
+    "test": "node test.mjs && node test-edge.mjs && node test-study.mjs && node test-episodes.mjs && node test-library.mjs && node test-cloud.mjs && node test-busy.mjs && node test-deepseek.mjs",
     "secrets": "git diff --cached -U0 | grep -E 'AIza[0-9A-Za-z_-]{35}|gh[pousr]_[A-Za-z0-9]{36}|BEGIN [A-Z ]*PRIVATE KEY' || echo 'no secrets staged'"
   },
   "devDependencies": {
