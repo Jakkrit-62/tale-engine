@@ -246,8 +246,11 @@
         " (ถ้าเป็นบ่อย ให้เปลี่ยนเป็นรุ่น Flash-Lite)");
       e.transient = true;
     }
-    else if (status === 503) { e = apiErr("server", "เซิร์ฟเวอร์ Gemini มีคนใช้เยอะ ลองใหม่อีกครั้ง"); e.transient = true; }
-    else if (status >= 500) e = apiErr("server", "เซิร์ฟเวอร์ Gemini ขัดข้อง ลองใหม่อีกครั้ง");
+    else if (status === 503) {
+      e = apiErr("overloaded", "เซิร์ฟเวอร์ Gemini มีคนใช้เยอะ (ทุกโมเดลที่ลองเต็มหมด) — รอสัก 1-2 นาทีแล้วกดลองใหม่");
+      e.transient = true;
+    }
+    else if (status >= 500) { e = apiErr("server", "เซิร์ฟเวอร์ Gemini ขัดข้อง ลองใหม่อีกครั้ง"); e.transient = true; }
     else e = apiErr("http_" + status, detail || ("HTTP " + status));
     e.retryAfter = info.retryAfter;
     return e;
@@ -288,8 +291,11 @@
   }
 
   // Errors that mean "this model can't serve you right now" — another
-  // model with its own quota may still work.
-  const SWITCHABLE = { no_model: 1, no_quota: 1, rate_limited: 1 };
+  // model with its own quota (and its own server capacity) may still work.
+  // 503 "model is overloaded" is per model: Google often has room on a
+  // sibling model while the popular one is full.
+  const SWITCHABLE = { no_model: 1, no_quota: 1, rate_limited: 1, overloaded: 1, server: 1 };
+  const BUSY_WAIT = 10;   // s to wait when every model is overloaded, before one more round
 
   async function gemini({ system, turns, onText, onStatus, temperature, maxTokens, signal, model, noFallback, quiet }) {
     if (!settings.apiKey) throw apiErr("no_key", "ยังไม่ได้ตั้งค่า API key");
@@ -346,28 +352,42 @@
           continue;
         }
         const err = httpErr(r.status, info, m);
-        if (r.status === 503 && attempt < 1) {
-          if (onStatus) onStatus(4, attempt + 1);
-          await waitFor(4000, signal);
+        // one quick retry on the same model, then move on to the next one.
+        // Background work (quiet: memory summaries) never waits — the player
+        // is holding for it, and it simply runs again after the next turn.
+        if (r.status >= 500 && attempt < 1 && !quiet) {
+          if (onStatus) onStatus(2, attempt + 1, "busy");
+          await waitFor(2000, signal);
           continue;
         }
         throw err;
       }
     }
 
-    let res, used, firstErr = null, allRateLimited = true;
-    for (const m of chain) {
-      try { res = await post(m); used = m; break; }
-      catch (e) {
-        if (!SWITCHABLE[e.code]) throw e;
-        if (!firstErr) firstErr = e;
-        if (e.code !== "rate_limited") allRateLimited = false;
+    let res, used, firstErr = null, allRateLimited = true, allBusy = true;
+    const round = async () => {
+      for (const m of chain) {
+        try { res = await post(m); used = m; return; }
+        catch (e) {
+          if (!SWITCHABLE[e.code]) throw e;
+          if (!firstErr || (firstErr.code === "no_model" && e.code !== "no_model")) firstErr = e;
+          if (e.code !== "rate_limited") allRateLimited = false;
+          if (e.code !== "overloaded" && e.code !== "server") allBusy = false;
+        }
       }
+    };
+    await round();
+    // Every model overloaded at once: usually passes within seconds.
+    if (!res && allBusy && chain.length > 1 && !quiet) {
+      if (onStatus) onStatus(BUSY_WAIT, 2, "busy");
+      await waitFor(BUSY_WAIT * 1000, signal);
+      firstErr = null; allRateLimited = false;
+      await round();
     }
     // Every model is only briefly over its per-minute limit: wait the time
     // Google asks for, then try the first model once more.
     if (!res && allRateLimited && firstErr.retryAfter && firstErr.retryAfter <= 60) {
-      if (onStatus) onStatus(firstErr.retryAfter, 1);
+      if (onStatus) onStatus(firstErr.retryAfter, 1, "quota");
       await waitFor(firstErr.retryAfter * 1000, signal);
       res = await post(wanted); used = wanted;
     }
@@ -807,8 +827,10 @@
         turns,
         maxTokens: ep ? EP_MAX_TOKENS : undefined,
         signal: currentAbort.signal,
-        onStatus: (sec, n) => {
-          bubble.textContent = "⏳ โควตาต่อนาทีเต็ม — รอ " + sec + " วินาทีแล้วลองให้อัตโนมัติ (ครั้งที่ " + n + ")…";
+        onStatus: (sec, n, why) => {
+          bubble.textContent = (why === "busy"
+            ? "⏳ เซิร์ฟเวอร์ Gemini มีคนใช้เยอะ — รอ " + sec + " วินาทีแล้วลองใหม่/สลับโมเดลให้อัตโนมัติ"
+            : "⏳ โควตาต่อนาทีเต็ม — รอ " + sec + " วินาทีแล้วลองให้อัตโนมัติ") + " (ครั้งที่ " + n + ")…";
         },
         onText: (t) => {
           // hide the machine blocks (and a half-streamed "<<STU…" marker)

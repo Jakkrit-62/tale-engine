@@ -71,7 +71,8 @@ win.fetch = async (url, opts) => {
     lastBody = body;
     if (failNext) {
       failNext = false;
-      return { ok: false, status: 500, body: null, json: async () => ({ error: { message: "boom" } }) };
+      // 5xx is retried/switched now; a request rejected outright still ends the run
+      return { ok: false, status: 400, body: null, json: async () => ({ error: { message: "boom" } }) };
     }
     text = reply(body);
   }
