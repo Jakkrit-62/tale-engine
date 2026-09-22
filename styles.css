@@ -346,3 +346,13 @@ mark.vw { background:none; color:inherit; border-bottom:2px dotted var(--accent)
   top:calc(10px + env(safe-area-inset-top)); background:var(--accent); color:var(--accent-ink);
   border:none; border-radius:999px; padding:10px 18px; font-size:13.5px; font-weight:600;
   box-shadow:0 4px 16px rgba(0,0,0,.3); max-width:92vw; }
+
+/* ---------- สำรองออนไลน์ ---------- */
+.cloudstat { display:block; font-size:13px; color:var(--ok); line-height:1.5; }
+.cloudstat.warn { color:var(--warn); }
+.libcloud { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; margin:0 0 10px;
+  padding:8px 10px; background:var(--bg-el); border:1px solid var(--border); border-radius:12px; }
+.libcloud .cloudstat { flex:1 1 180px; min-width:0; }
+.libcloud button { padding:6px 10px; font-size:12.5px; }
+#restoreList .lbl { margin-top:16px; }
+.cloudstat.off { color:var(--dim); }

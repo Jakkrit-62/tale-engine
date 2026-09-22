@@ -191,6 +191,12 @@
     </div>
   </div>
 
+  <div class="libcloud">
+    <span id="libCloudStatus" class="cloudstat"></span>
+    <button type="button" id="libCloudSync" class="ghost sm" style="display:none">☁️ ซิงก์</button>
+    <button type="button" id="libRestore" class="ghost sm">🕘 กู้คืน</button>
+  </div>
+
   <input type="search" id="libSearch" class="libsearch" placeholder="🔍 ค้นหาชื่อเรื่อง ตัวละคร หรือเนื้อเรื่อง…" autocomplete="off">
 
   <div class="libfilters">
@@ -453,6 +459,18 @@
     </div>
 
     <div class="dsec">
+      <div class="dsechead"><span>☁️ สำรองออนไลน์ (Google Drive)</span></div>
+      <div id="cloudStatus" class="cloudstat"></div>
+      <button id="cloudConnect" class="primary full">☁️ เชื่อมต่อ Google Drive</button>
+      <button id="cloudSyncNow" class="ghost full" style="display:none">🔄 ซิงก์เดี๋ยวนี้</button>
+      <button id="cloudRestore" class="ghost full">🕘 กู้คืนจากสำรอง</button>
+      <button id="cloudOff" class="ghost full" style="display:none">⏏️ หยุดสำรองออนไลน์</button>
+      <div class="note">เก็บในโฟลเดอร์ซ่อนของแอปใน Drive ของคุณเอง — แอปอื่นและคนอื่นมองไม่เห็น
+        ซิงก์เองภายใน 1 นาทีหลังเขียน และตอนออกจากแอป · เปิดเครื่องอื่นแล้วเชื่อมต่อบัญชีเดียวกัน เรื่องจะตามมา ·
+        สำรองรายวัน 10 วัน · <b>API key ไม่ถูกอัปโหลด</b></div>
+    </div>
+
+    <div class="dsec">
       <button id="exportBtn" class="ghost full">📤 ส่งออก / นำเข้า</button>
       <button id="slotsBtn" class="ghost full">📚 คลังนิยาย (เลือกเรื่อง)</button>
       <button id="settingsBtn" class="ghost full">⚙️ ตั้งค่า API</button>
@@ -576,6 +594,16 @@
       <div class="sm dim" id="vocabInfo" style="margin:8px 0"></div>
       <div id="vocabList"></div>
       <button id="vocabCsv" class="ghost full" style="margin-top:12px">⬇️ ดาวน์โหลด .csv (ใช้กับ Anki / Excel)</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="restoreModal">
+  <div class="modalbox">
+    <div class="modalhead"><b>🕘 กู้คืนจากสำรอง</b><button data-close class="x">✕</button></div>
+    <div class="modalbody">
+      <div class="note">กู้คืนแล้วจะได้เป็น<b>เรื่องใหม่</b>ในคลังนิยาย ไม่ทับเรื่องเดิม — ลบฉบับที่ไม่ต้องการทีหลังได้</div>
+      <div id="restoreList"></div>
     </div>
   </div>
 </div>

@@ -119,10 +119,10 @@ $("libBtn").click(); await settle(40);
 check("📚 opens the library screen", $("library").style.display === "block" && $("game").style.display === "none");
 check("count shows all stories", /ทั้งหมด 13 เรื่อง/.test($("libCount").textContent), $("libCount").textContent);
 check("10 cards on page 1", cards().length === 10, "got " + cards().length);
-// the story just left is the most recent one — it sits on top, ready to resume
-check("most recent first", titles()[0] === "เรื่องที่ 12" && titles()[1] === "เรื่องที่ 13", titles().slice(0, 3).join(","));
-check("story being read is marked", cards()[0].classList.contains("current") && /กำลังอ่าน/.test(cards()[0].textContent));
-const c12 = cards()[0];
+// just viewing the library is not a change: order stays by real edits
+check("most recent first", titles()[0] === "เรื่องที่ 13" && titles()[1] === "เรื่องที่ 12", titles().slice(0, 3).join(","));
+check("story being read is marked", cards()[1].classList.contains("current") && /กำลังอ่าน/.test(cards()[1].textContent));
+const c12 = cards()[1];
 check("card shows chapters", /📖 12 ตอน/.test(c12.textContent), c12.querySelector(".libstats").textContent);
 check("card shows word count", /≈7,800 คำ/.test(c12.textContent), c12.querySelector(".libstats").textContent);
 check("card shows latest chapter title", /ล่าสุด: ตอนที่ 12: บทที่ 12/.test(c12.textContent));

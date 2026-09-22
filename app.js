@@ -122,16 +122,21 @@
   // ============================================================
   let saveChain = Promise.resolve();
   let saveTimer = null;
+  let flushPending = null;   // runs a debounced write now, without touching updatedAt
 
   function persist(immediate) {
     if (!state) return Promise.resolve();
     state.updatedAt = now();
     const doWrite = () => {
+      flushPending = null;
       saveChain = saveChain.then(async () => {
         try {
-          await dbPut(STORE_SAVES, JSON.parse(JSON.stringify(state)));
+          const copy = JSON.parse(JSON.stringify(state));
+          await dbPut(STORE_SAVES, copy);
           await setSetting("lastSave", state.id);
           setSaveStatus("ok");
+          localSnapshot(copy);
+          cloudTouch();
         } catch (e) {
           console.error("บันทึกไม่สำเร็จ:", e);
           setSaveStatus("fail", e && e.name === "QuotaExceededError"
@@ -143,7 +148,16 @@
     };
     if (immediate) { clearTimeout(saveTimer); return doWrite(); }
     clearTimeout(saveTimer);
-    return new Promise((r) => { saveTimer = setTimeout(() => doWrite().then(r), 350); });
+    return new Promise((r) => {
+      flushPending = () => { clearTimeout(saveTimer); return doWrite().then(r); };
+      saveTimer = setTimeout(flushPending, 350);
+    });
+  }
+
+  // Make sure what is on screen is on disk, without marking it as a new change.
+  async function flushSave() {
+    if (flushPending) await flushPending();
+    await saveChain;
   }
 
   function setSaveStatus(kind, msg) {
@@ -2844,7 +2858,7 @@
   async function openLibrary() {
     if (busy) { toast("รอให้เทิร์นปัจจุบันจบก่อน"); return; }
     stopEpisodes();
-    if (state) await persist(true);
+    await flushSave();
     closeModals(); closeDrawer();
     try { libSaves = await dbAll(STORE_SAVES); }
     catch (e) { libSaves = []; toast("โหลดรายการเรื่องไม่สำเร็จ"); }
@@ -3176,6 +3190,460 @@
     };
   }
 
+  // ============================================================
+  // Online backup — Google Drive "appDataFolder": a hidden folder in the
+  // player's own Drive that only this app can see. Straight from the
+  // browser to Google, no server in between. The Gemini key never leaves
+  // the device (it lives in settings, not in a save).
+  //
+  // Files:  story-<id>  current version of each story (gzip JSON)
+  //         bak-<id>-<yyyy-mm-dd>  the cloud copy as it stood before the
+  //         first upload of that day — copied server-side, 10 kept.
+  //         del-<id>  "deleted on some device" marker, so another device
+  //         removes its copy too instead of uploading it back.
+  // ============================================================
+  const GDRIVE_CLIENT_ID = "516331601954-n3si5cl6n3kbblt8b1gbpqqs69bl0csl.apps.googleusercontent.com";
+  const GDRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
+  const GDRIVE_API = "https://www.googleapis.com/drive/v3/files";
+  const GDRIVE_UP = "https://www.googleapis.com/upload/drive/v3/files";
+  const CLOUD_DELAY = 60 * 1000;       // a change is uploaded within a minute
+  const CLOUD_BACKUPS = 10;            // daily cloud backups kept per story
+  const SNAP_EVERY = 10 * 60 * 1000;   // local snapshot at most every 10 min per story
+  const SNAP_KEEP = 3;
+
+  // synced: id → updatedAt both sides agreed on at the last sync
+  const cloud = { on: false, token: "", exp: 0, synced: {}, last: 0, busy: false, timer: null, err: "" };
+
+  const tokenValid = () => !!cloud.token && now() < cloud.exp;
+  const dayKey = (t) => {
+    const d = new Date(t);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  };
+
+  function cloudErr(code, msg) { const e = new Error(msg); e.code = code; return e; }
+
+  function loadGis() {
+    if (window.google && window.google.accounts && window.google.accounts.oauth2) return Promise.resolve();
+    if (loadGis.p) return loadGis.p;
+    loadGis.p = new Promise((resolve, reject) => {
+      const sc = document.createElement("script");
+      sc.src = "https://accounts.google.com/gsi/client";
+      sc.async = true;
+      sc.onload = () => resolve();
+      sc.onerror = () => { loadGis.p = null; reject(cloudErr("net", "โหลดระบบล็อกอิน Google ไม่สำเร็จ — เช็กเน็ตแล้วลองใหม่")); };
+      document.head.appendChild(sc);
+    });
+    return loadGis.p;
+  }
+
+  // Must be called from a tap: Google opens its sign-in popup.
+  async function cloudSignIn(first) {
+    await loadGis();
+    const r = await new Promise((resolve, reject) => {
+      const tc = window.google.accounts.oauth2.initTokenClient({
+        client_id: GDRIVE_CLIENT_ID,
+        scope: GDRIVE_SCOPE,
+        callback: (res) => res && res.access_token ? resolve(res)
+          : reject(cloudErr("auth", (res && (res.error_description || res.error)) || "ล็อกอินไม่สำเร็จ")),
+        error_callback: (e) => reject(cloudErr("auth", e && e.type === "popup_closed"
+          ? "ปิดหน้าต่างล็อกอินก่อนเสร็จ" : e && e.type === "popup_failed_to_open"
+          ? "เบราว์เซอร์บล็อกหน้าต่างล็อกอิน — กดอีกครั้ง" : "ล็อกอินไม่สำเร็จ")),
+      });
+      tc.requestAccessToken({ prompt: first ? "consent" : "" });
+    });
+    cloud.token = r.access_token;
+    cloud.exp = now() + ((Number(r.expires_in) || 3600) - 120) * 1000;
+    try { await setSetting("cloudTok", { t: cloud.token, exp: cloud.exp }); } catch (e) { }
+  }
+
+  async function drive(url, opts) {
+    opts = opts || {};
+    const headers = Object.assign({ Authorization: "Bearer " + cloud.token }, opts.headers || {});
+    let r;
+    try { r = await fetch(url, Object.assign({}, opts, { headers })); }
+    catch (e) { throw cloudErr("net", "ต่อ Google Drive ไม่ได้"); }
+    if (r.status === 401) { cloud.token = ""; cloud.exp = 0; throw cloudErr("auth", "หมดเวลาเข้าสู่ระบบ"); }
+    if (!r.ok) {
+      let msg = "HTTP " + r.status;
+      try { const j = await r.json(); if (j.error && j.error.message) msg = j.error.message; } catch (e) { }
+      throw cloudErr(r.status === 403 && /quota|storage/i.test(msg) ? "full" : "api", msg);
+    }
+    return r;
+  }
+
+  async function packSave(save) {
+    const json = JSON.stringify(save);
+    if (typeof CompressionStream === "undefined") return { blob: new Blob([json], { type: "application/json" }), gz: false };
+    const stream = new Blob([json]).stream().pipeThrough(new CompressionStream("gzip"));
+    return { blob: await new Response(stream).blob(), gz: true };
+  }
+
+  async function unpackSave(res, gz) {
+    let obj;
+    if (gz) {
+      const stream = res.body.pipeThrough(new DecompressionStream("gzip"));
+      obj = JSON.parse(await new Response(stream).text());
+    } else {
+      obj = await res.json();
+    }
+    if (!obj || typeof obj !== "object" || !Array.isArray(obj.log)) throw cloudErr("api", "ไฟล์บน Drive เสียหาย");
+    return obj;
+  }
+
+  async function driveList() {
+    const files = [];
+    let page = "";
+    do {
+      const r = await drive(GDRIVE_API + "?spaces=appDataFolder&pageSize=1000" +
+        "&fields=nextPageToken,files(id,name,modifiedTime,size,appProperties)" +
+        (page ? "&pageToken=" + encodeURIComponent(page) : ""));
+      const j = await r.json();
+      files.push(...(j.files || []));
+      page = j.nextPageToken || "";
+    } while (page);
+    return files;
+  }
+
+  function saveProps(save, gz) {
+    // appProperties: 124 bytes per key+value, Thai is 3 bytes a letter
+    return { sid: save.id, updatedAt: String(save.updatedAt || 0), gz: gz ? "1" : "0",
+      title: String(save.title || save.name || "").slice(0, 30) };
+  }
+
+  async function driveUpload(name, save, fileId) {
+    const { blob, gz } = await packSave(save);
+    const meta = { name, appProperties: saveProps(save, gz) };
+    if (!fileId) meta.parents = ["appDataFolder"];
+    const form = new FormData();
+    form.append("metadata", new Blob([JSON.stringify(meta)], { type: "application/json" }));
+    form.append("file", blob);
+    const r = await drive(GDRIVE_UP + (fileId ? "/" + fileId : "") + "?uploadType=multipart&fields=id,name,appProperties",
+      { method: fileId ? "PATCH" : "POST", body: form });
+    return r.json();
+  }
+
+  async function driveDownload(f) {
+    const r = await drive(GDRIVE_API + "/" + f.id + "?alt=media");
+    return unpackSave(r, f.appProperties && f.appProperties.gz === "1");
+  }
+
+  async function pushStory(save, cur, baks) {
+    if (cur) {
+      // first upload of the day: keep yesterday's cloud copy as a backup
+      const name = "bak-" + save.id + "-" + dayKey(now());
+      if (!baks.some(b => b.name === name)) {
+        const r = await drive(GDRIVE_API + "/" + cur.id + "/copy?fields=id,name,appProperties", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, parents: ["appDataFolder"], appProperties: cur.appProperties }),
+        });
+        baks.push(await r.json());
+      }
+      baks.sort((a, b) => a.name < b.name ? 1 : -1);
+      for (const old of baks.splice(CLOUD_BACKUPS)) {
+        try { await drive(GDRIVE_API + "/" + old.id, { method: "DELETE" }); } catch (e) { }
+      }
+    }
+    await driveUpload("story-" + save.id, save, cur && cur.id);
+    cloud.synced[save.id] = save.updatedAt || 0;
+  }
+
+  // Put a downloaded story on disk as-is (its updatedAt must survive).
+  async function storeRemote(obj) {
+    const save = defaultState(obj);
+    await dbPut(STORE_SAVES, save);
+    cloud.synced[save.id] = save.updatedAt || 0;
+    if (state && state.id === save.id) {
+      state = save;
+      if ($("game").style.display === "flex") { $("modeSelect").value = state.mode; renderAll(); }
+    }
+    return save;
+  }
+
+  const storyInUse = (id) => !!(state && state.id === id && (busy || epRun));
+
+  async function cloudSync(opts) {
+    opts = opts || {};
+    if (!cloud.on || cloud.busy) return false;
+    clearTimeout(cloud.timer); cloud.timer = null;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) { cloud.err = "offline"; renderCloud(); return false; }
+    if (!tokenValid()) {
+      if (!opts.interactive) { cloud.err = "auth"; renderCloud(); return false; }
+      try { await cloudSignIn(false); }
+      catch (e) { cloud.err = e.message; renderCloud(); if (!opts.quiet) toast("☁️ " + e.message, 4000); return false; }
+    }
+    cloud.busy = true; cloud.err = ""; renderCloud();
+    const res = { up: 0, down: 0, copies: 0 };
+    try {
+      await flushSave();
+      const files = await driveList();
+      const cur = {}, baks = {}, dels = {};
+      for (const f of files) {
+        const sid = f.appProperties && f.appProperties.sid;
+        if (!sid) continue;
+        if (f.name === "story-" + sid) cur[sid] = f;
+        else if (f.name === "del-" + sid) dels[sid] = f;
+        else if (f.name.startsWith("bak-")) (baks[sid] = baks[sid] || []).push(f);
+      }
+      const undelete = async (sid) => {
+        if (!dels[sid]) return;
+        await drive(GDRIVE_API + "/" + dels[sid].id, { method: "DELETE" });
+        delete dels[sid];
+      };
+      const local = await dbAll(STORE_SAVES);
+      const seen = new Set();
+      for (const s of local) {
+        seen.add(s.id);
+        if (storyInUse(s.id)) continue;           // mid-chapter: next round
+        const f = cur[s.id], bl = baks[s.id] || [];
+        const lu = s.updatedAt || 0;
+        if (!f) {
+          // deleted on another device and untouched here since → delete here too
+          // (its daily backups stay on Drive for 🕘). Edited here → keep it.
+          if (dels[s.id] && cloud.synced[s.id] === lu && !(state && state.id === s.id)) {
+            await dbDel(STORE_SAVES, s.id);
+            delete cloud.synced[s.id];
+            res.gone = (res.gone || 0) + 1;
+            continue;
+          }
+          await pushStory(s, null, bl); await undelete(s.id); res.up++; continue;
+        }
+        const ru = +f.appProperties.updatedAt || 0;
+        if (ru === lu) { cloud.synced[s.id] = lu; continue; }
+        const base = cloud.synced[s.id];
+        const localChanged = lu !== base, remoteChanged = ru !== base;
+        if (base === undefined || localChanged === remoteChanged) {
+          if (base !== undefined) {
+            // edited on two devices since the last sync: keep both, lose nothing
+            const other = defaultState(await driveDownload(f));
+            const newer = ru > lu;
+            const copy = newer ? JSON.parse(JSON.stringify(s)) : other;
+            copy.id = uid();
+            copy.title = (copy.title || copy.name) + (newer ? " (ฉบับในเครื่องนี้)" : " (ฉบับจากอีกเครื่อง)");
+            await dbPut(STORE_SAVES, copy);
+            await pushStory(copy, null, []);
+            res.copies++;
+            if (newer) { await storeRemote(other); res.down++; } else { await pushStory(s, f, bl); res.up++; }
+          } else if (ru > lu) { await storeRemote(await driveDownload(f)); res.down++; }
+          else { await pushStory(s, f, bl); res.up++; }
+        } else if (localChanged) { await pushStory(s, f, bl); res.up++; }
+        else { await storeRemote(await driveDownload(f)); res.down++; }
+      }
+      for (const sid of Object.keys(cur)) {
+        if (seen.has(sid)) continue;
+        if (cloud.synced[sid] !== undefined) {
+          // deleted on this device → remove the live copy and leave a marker
+          // for the other devices; backups stay for 🕘
+          if (!dels[sid]) {
+            await drive(GDRIVE_UP + "?uploadType=multipart&fields=id", { method: "POST", body: (() => {
+              const form = new FormData();
+              form.append("metadata", new Blob([JSON.stringify({ name: "del-" + sid, parents: ["appDataFolder"],
+                appProperties: { sid, deletedAt: String(now()), title: cur[sid].appProperties.title || "" } })], { type: "application/json" }));
+              form.append("file", new Blob(["{}"], { type: "application/json" }));
+              return form;
+            })() });
+          }
+          await drive(GDRIVE_API + "/" + cur[sid].id, { method: "DELETE" });
+          delete cloud.synced[sid];
+        } else {
+          await storeRemote(await driveDownload(cur[sid]));   // new from another device
+          res.down++;
+        }
+      }
+      cloud.last = now();
+      await setSetting("cloudSynced", cloud.synced);
+      await setSetting("cloudLast", cloud.last);
+      if ((res.down || res.gone) && $("library").style.display === "block") {
+        libSaves = await dbAll(STORE_SAVES);
+        renderLibrary();
+      }
+      if (!opts.quiet || res.down || res.copies || res.gone) {
+        toast("☁️ ซิงก์แล้ว" + (res.up ? " · อัปโหลด " + res.up : "") + (res.down ? " · ดึงมา " + res.down : "") +
+          (res.gone ? " · ลบตามเครื่องอื่น " + res.gone : "") +
+          (res.copies ? " · มี " + res.copies + " เรื่องที่แก้จากสองเครื่อง เก็บไว้ทั้งสองฉบับ" : ""), res.copies ? 6000 : 2600);
+      }
+      return res;
+    } catch (e) {
+      cloud.err = e.code === "auth" ? "auth" : e.code === "full" ? "Google Drive เต็ม" : e.message || "ซิงก์ไม่สำเร็จ";
+      try { await setSetting("cloudSynced", cloud.synced); } catch (x) { }
+      if (!opts.quiet) toast("☁️ ซิงก์ไม่สำเร็จ: " + (e.code === "auth" ? "ต้องเข้าสู่ระบบใหม่" : cloud.err), 4000);
+      return false;
+    } finally {
+      cloud.busy = false;
+      renderCloud();
+    }
+  }
+
+  // Called after every local save: upload within a minute. Not reset by
+  // later saves, so a long auto-chapter run still syncs as it goes.
+  function cloudTouch() {
+    if (!cloud.on || cloud.timer) return;
+    cloud.timer = setTimeout(() => { cloud.timer = null; cloudSync({ quiet: true }); }, CLOUD_DELAY);
+  }
+
+  function renderCloud() {
+    let msg, cls = "";
+    if (!cloud.on) { msg = "ยังไม่ได้เชื่อมต่อ — เรื่องทั้งหมดอยู่ในเครื่องนี้เท่านั้น"; cls = "off"; }
+    else if (cloud.busy) msg = "⏳ กำลังซิงก์กับ Google Drive…";
+    else if (cloud.err === "auth" || (!tokenValid() && !cloud.err)) { msg = "🔑 ต้องเข้าสู่ระบบอีกครั้ง — แตะ ☁️ ซิงก์"; cls = "warn"; }
+    else if (cloud.err === "offline") { msg = "📴 ออฟไลน์ — จะซิงก์เมื่อต่อเน็ต"; cls = "warn"; }
+    else if (cloud.err) { msg = "⚠️ " + cloud.err; cls = "warn"; }
+    else msg = "✅ ซิงก์กับ Google Drive แล้ว" + (cloud.last ? " · " + timeAgo(cloud.last) : "");
+    for (const id of ["cloudStatus", "libCloudStatus"]) {
+      const el = $(id);
+      if (el) { el.textContent = msg; el.className = "cloudstat " + cls; }
+    }
+    const on = cloud.on;
+    const vis = (id, v) => { const el = $(id); if (el) el.style.display = v ? "" : "none"; };
+    vis("cloudConnect", !on); vis("cloudSyncNow", on); vis("cloudOff", on); vis("libCloudSync", on);
+    for (const id of ["cloudSyncNow", "libCloudSync"]) { const el = $(id); if (el) el.disabled = cloud.busy; }
+  }
+
+  async function cloudConnect() {
+    const btn = $("cloudConnect");
+    btn.disabled = true;
+    try {
+      await cloudSignIn(true);
+      cloud.on = true; cloud.err = "";
+      await setSetting("cloudOn", "1");
+      renderCloud();
+      await cloudSync({ interactive: true });
+    } catch (e) {
+      toast("☁️ " + (e.message || "เชื่อมต่อไม่สำเร็จ"), 4000);
+    }
+    btn.disabled = false;
+    renderCloud();
+  }
+
+  async function cloudDisconnect() {
+    if (!confirm("หยุดสำรองขึ้น Google Drive?\nข้อมูลที่อัปโหลดไว้แล้วยังอยู่ใน Drive — เชื่อมต่อใหม่เมื่อไหร่ก็ใช้ต่อได้")) return;
+    try { if (cloud.token && window.google && window.google.accounts) window.google.accounts.oauth2.revoke(cloud.token, () => { }); } catch (e) { }
+    cloud.on = false; cloud.token = ""; cloud.exp = 0; cloud.err = "";
+    clearTimeout(cloud.timer); cloud.timer = null;
+    await setSetting("cloudOn", "0");
+    await setSetting("cloudTok", null);
+    renderCloud();
+    toast("หยุดการสำรองออนไลน์แล้ว");
+  }
+
+  // ---------- Local snapshots: a few older copies of each story on this device ----------
+  const snapLast = {};
+  async function localSnapshot(save) {
+    if (!save || !save.id || now() - (snapLast[save.id] || 0) < SNAP_EVERY) return;
+    snapLast[save.id] = now();
+    try {
+      const idx = (await getSetting("snapIndex", null)) || {};
+      const e = idx[save.id] || { title: "", n: 0, times: [] };
+      const slot = e.n % SNAP_KEEP;
+      await setSetting("snap:" + save.id + ":" + slot, save);
+      e.title = save.title || save.name || "";
+      e.times[slot] = now();
+      e.n++;
+      idx[save.id] = e;
+      await setSetting("snapIndex", idx);
+    } catch (e) { /* a snapshot must never break saving */ }
+  }
+
+  // ---------- 🕘 Restore: always as a new story, never over an existing one ----------
+  async function restoreAsNew(obj, when) {
+    const save = defaultState(JSON.parse(JSON.stringify(obj)));
+    save.id = uid();
+    save.title = (save.title || save.name) + " (กู้คืน " + new Date(when).toLocaleDateString("th-TH", { day: "numeric", month: "short" }) + ")";
+    save.autoPlay = false;
+    save.updatedAt = now();
+    await dbPut(STORE_SAVES, save);
+    closeModals();
+    toast("กู้คืนแล้ว — เป็นเรื่องใหม่ในคลังนิยาย");
+    await openLibrary();
+  }
+
+  function restoreRow(title, sub, onRestore) {
+    const row = document.createElement("div");
+    row.className = "slotcard";
+    row.innerHTML = '<div class="slotinfo"><b>' + esc(title) + '</b><div class="dim">' + esc(sub) + "</div></div>";
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "ghost sm"; b.textContent = "กู้คืน";
+    b.onclick = async () => {
+      b.disabled = true; b.textContent = "⏳";
+      try { await onRestore(); } catch (e) { toast("กู้คืนไม่สำเร็จ: " + (e.message || "")); b.disabled = false; b.textContent = "กู้คืน"; }
+    };
+    row.appendChild(b);
+    return row;
+  }
+
+  async function openRestore() {
+    openModal("restoreModal");
+    const box = $("restoreList");
+    box.innerHTML = "";
+    const head = (t) => { const h = document.createElement("div"); h.className = "lbl"; h.textContent = t; box.appendChild(h); };
+
+    head("💾 สำเนาในเครื่องนี้ (ล่าสุด " + SNAP_KEEP + " ชุดต่อเรื่อง ทุก ~10 นาที)");
+    const idx = (await getSetting("snapIndex", null)) || {};
+    let nLocal = 0;
+    for (const sid of Object.keys(idx)) {
+      const e = idx[sid];
+      e.times.map((t, slot) => ({ t, slot })).filter(x => x.t).sort((a, b) => b.t - a.t).forEach(({ t, slot }) => {
+        nLocal++;
+        box.appendChild(restoreRow(e.title || "ไม่มีชื่อ", fmtDate(t), async () => {
+          const s = await getSetting("snap:" + sid + ":" + slot, null);
+          if (!s) throw new Error("ไม่พบสำเนา");
+          await restoreAsNew(s, t);
+        }));
+      });
+    }
+    if (!nLocal) box.insertAdjacentHTML("beforeend", '<div class="dim sm">ยังไม่มีสำเนา — จะเริ่มเก็บเมื่อเล่นหรือเขียนตอนใหม่</div>');
+
+    head("☁️ Google Drive (สำรองรายวัน " + CLOUD_BACKUPS + " วันต่อเรื่อง)");
+    if (!cloud.on) { box.insertAdjacentHTML("beforeend", '<div class="dim sm">ยังไม่ได้เชื่อมต่อ Google Drive</div>'); return; }
+    const wait = document.createElement("div");
+    wait.className = "dim sm"; wait.textContent = "กำลังโหลดรายการจาก Drive…";
+    box.appendChild(wait);
+    try {
+      if (!tokenValid()) await cloudSignIn(false);
+      const files = (await driveList()).filter(f => f.appProperties && f.appProperties.sid && !f.name.startsWith("del-"));
+      files.sort((a, b) => (+b.appProperties.updatedAt || 0) - (+a.appProperties.updatedAt || 0));
+      wait.remove();
+      if (!files.length) box.insertAdjacentHTML("beforeend", '<div class="dim sm">ยังไม่มีไฟล์บน Drive</div>');
+      for (const f of files) {
+        const t = +f.appProperties.updatedAt || Date.parse(f.modifiedTime) || now();
+        const kind = f.name.startsWith("bak-") ? "สำรองรายวัน" : "ฉบับล่าสุด";
+        box.appendChild(restoreRow(f.appProperties.title || "ไม่มีชื่อ", kind + " · " + fmtDate(t),
+          async () => restoreAsNew(await driveDownload(f), t)));
+      }
+    } catch (e) {
+      wait.textContent = "โหลดจาก Drive ไม่สำเร็จ: " + (e.code === "auth" ? "ต้องเข้าสู่ระบบใหม่" : e.message);
+    }
+  }
+
+  function bindCloud() {
+    $("cloudConnect").onclick = cloudConnect;
+    $("cloudSyncNow").onclick = () => cloudSync({ interactive: true });
+    $("libCloudSync").onclick = () => cloudSync({ interactive: true });
+    $("cloudOff").onclick = cloudDisconnect;
+    $("cloudRestore").onclick = openRestore;
+    $("libRestore").onclick = openRestore;
+    renderCloud();
+    // leaving the app (home button, switching apps) is the moment to upload
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden" && cloud.on && cloud.timer) cloudSync({ quiet: true });
+    });
+    window.addEventListener("online", () => { if (cloud.on && cloud.err === "offline") cloudSync({ quiet: true }); });
+  }
+
+  async function initCloud() {
+    // ask the browser not to evict this app's data when the phone runs low
+    try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => { }); } catch (e) { }
+    cloud.on = String(await getSetting("cloudOn", "0")) === "1";
+    cloud.synced = (await getSetting("cloudSynced", null)) || {};
+    cloud.last = +(await getSetting("cloudLast", 0)) || 0;
+    const tok = await getSetting("cloudTok", null);
+    if (tok && tok.t && tok.exp > now()) { cloud.token = tok.t; cloud.exp = tok.exp; }
+    renderCloud();
+    if (cloud.on) {
+      if (tokenValid()) cloudSync({ quiet: true });
+      else loadGis().catch(() => { });   // ready for the tap, so the popup is not blocked
+    }
+  }
+
   // ---------- Settings ----------
   let modelList = null; // models this key can call, fetched via ListModels
 
@@ -3294,7 +3762,7 @@
     // the app from opening — log it and carry on with the rest.
     for (const bind of [bindSetup, bindInput, bindDrawer, bindTurnTools, bindScrollFollow,
       bindStateEditor, bindChapters, bindExport, bindLibrary, bindSettings, bindVocab,
-      bindTranslate, bindEpisodes]) {
+      bindTranslate, bindEpisodes, bindCloud]) {
       try { bind(); } catch (e) { console.error("bind " + bind.name + ":", e); }
     }
 
@@ -3328,6 +3796,7 @@
     }
 
     window.__taleBooted = true;
+    initCloud().catch((e) => console.warn("cloud:", e));
     try { setupUpdates(); } catch (e) { }
   }
 
