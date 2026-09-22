@@ -173,7 +173,7 @@
   let settings = { apiKey: "", model: DEFAULT_MODEL, ttsRate: 0.85, ttsPitch: 1, ttsFollow: true,
     epCount: 3, epVoice: false, trTo: "auto",
     // AI provider: main one + what to do when it fails ("ask" | "auto" | "off")
-    provider: "gemini", dsKey: "", dsModel: "deepseek-reasoner", fallback: "ask" };
+    provider: "gemini", backup: "", altKeys: {}, altModels: {}, fallback: "ask" };
 
   function mapTurns(turns) {
     // Gemini wants role "user" | "model"; merge consecutive same-role turns.
@@ -443,18 +443,64 @@
   }
 
   // ============================================================
-  // DeepSeek API (OpenAI-compatible, pay-as-you-go, CORS allowed)
+  // Other AI providers — all speak the OpenAI chat API and allow calls
+  // straight from the browser (CORS checked against each server).
+  // Free tiers change; the notes say what they were when this was written.
   // ============================================================
-  const DS_API = "https://api.deepseek.com/";
-  const DS_DEFAULT_MODEL = "deepseek-reasoner";
-  const DS_MODELS = [
-    { id: "deepseek-reasoner", label: "DeepSeek R1 — คิดก่อนตอบ (deepseek-reasoner)" },
-    { id: "deepseek-chat", label: "DeepSeek V3 — เร็ว ประหยัดกว่า (deepseek-chat)" },
-  ];
-  // output caps per model (R1's includes its thinking)
-  const dsMaxOut = (m) => /reasoner/.test(m) ? 32768 : 8192;
+  const ALT = {
+    mistral: {
+      name: "Mistral", free: true, base: "https://api.mistral.ai/v1/", maxOut: 32768,
+      def: "mistral-large-latest", keyUrl: "console.mistral.ai → API Keys",
+      note: "ฟรี (แผน Experiment) ใช้ได้ทุกรุ่นรวม Large · ต้องยืนยันเบอร์โทรตอนสมัคร · ข้อความที่ส่งไปถูกใช้เทรนโมเดล ปิดได้ใน Admin → Privacy",
+      models: [
+        { id: "mistral-large-latest", label: "Mistral Large — เก่งสุด (แนะนำ)" },
+        { id: "mistral-medium-latest", label: "Mistral Medium" },
+        { id: "mistral-small-latest", label: "Mistral Small — เร็ว" },
+      ],
+    },
+    openrouter: {
+      name: "OpenRouter", free: true, base: "https://openrouter.ai/api/v1/", maxOut: 16384, freeOnly: true,
+      def: "openrouter/free", keyUrl: "openrouter.ai/keys",
+      note: "ฟรีเฉพาะรุ่นที่ลงท้าย :free · 50 ครั้ง/วัน 20 ครั้ง/นาที · 🔄 โหลดรายชื่อ จะแสดงเฉพาะรุ่นฟรี",
+      headers: { "X-Title": "Tale Engine" },
+      models: [
+        { id: "openrouter/free", label: "เลือกรุ่นฟรีให้อัตโนมัติ (openrouter/free)" },
+        { id: "qwen/qwen3.8-27b:free", label: "Qwen 3.8 27B (ฟรี)" },
+        { id: "google/gemma-4-31b-it:free", label: "Gemma 4 31B (ฟรี)" },
+        { id: "nvidia/nemotron-3-ultra-550b-a55b:free", label: "Nemotron 3 Ultra (ฟรี)" },
+        { id: "z-ai/glm-5.2:free", label: "GLM 5.2 (ฟรี · ความจำสั้น 32K)" },
+      ],
+    },
+    groq: {
+      name: "Groq", free: true, base: "https://api.groq.com/openai/v1/", maxOut: 8192,
+      def: "openai/gpt-oss-120b", keyUrl: "console.groq.com/keys",
+      note: "ฟรี ~1,000 ครั้ง/วัน แต่จำกัด ~8,000 token/นาที — ตอนยาวหรือเรื่องที่ความจำเยอะอาจติดเพดาน เหมาะเป็นตัวสำรองเทิร์นสั้น",
+      models: [
+        { id: "openai/gpt-oss-120b", label: "GPT-OSS 120B" },
+        { id: "openai/gpt-oss-20b", label: "GPT-OSS 20B — เร็ว" },
+        { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B" },
+      ],
+    },
+    deepseek: {
+      name: "DeepSeek", free: false, base: "https://api.deepseek.com/", maxOut: 8192,
+      def: "deepseek-reasoner", keyUrl: "platform.deepseek.com → API keys", balance: true,
+      note: "💰 เสียเงิน — ไม่มีโควตาฟรี ต้องเติมเงินก่อน · R1 คิดก่อนเขียน · V3 เร็วกว่า",
+      models: [
+        { id: "deepseek-reasoner", label: "DeepSeek R1 — คิดก่อนตอบ" },
+        { id: "deepseek-chat", label: "DeepSeek V3 — เร็ว" },
+      ],
+    },
+  };
+  const PROVIDERS = ["gemini", "mistral", "openrouter", "groq", "deepseek"];
+  const PROVIDER_NAME = { gemini: "Gemini" };
+  for (const id of Object.keys(ALT)) PROVIDER_NAME[id] = ALT[id].name;
 
-  function dsMessages(system, turns) {
+  const altKey = (p) => (settings.altKeys && settings.altKeys[p]) || "";
+  const altModel = (p) => (settings.altModels && settings.altModels[p]) || ALT[p].def;
+  // R1 thinks inside its output budget, so it gets far more room
+  const altMaxOut = (p, m) => p === "deepseek" && /reasoner/.test(m) ? 32768 : ALT[p].maxOut;
+
+  function chatMessages(system, turns) {
     const out = [];
     if (system) out.push({ role: "system", content: system });
     for (const t of turns) {
@@ -462,7 +508,7 @@
       const text = String(t.content || "").trim();
       if (!text) continue;
       const last = out[out.length - 1];
-      if (last && last.role === role) last.content += "\n\n" + text;   // R1 rejects same-role runs
+      if (last && last.role === role) last.content += "\n\n" + text;   // several APIs reject same-role runs
       else out.push({ role, content: text });
     }
     const first = out.findIndex(m => m.role !== "system");
@@ -471,44 +517,59 @@
     return out;
   }
 
-  async function dsError(res) {
+  async function altError(p, res) {
     let msg = "";
-    try { const j = await res.json(); msg = String((j.error && j.error.message) || ""); } catch (e) { }
-    const s = res.status;
-    if (s === 401) return apiErr("bad_key", "DeepSeek API key ไม่ถูกต้อง");
-    if (s === 402) return apiErr("no_balance", "ยอดเงินใน DeepSeek หมด — เติมเงินที่ platform.deepseek.com");
-    if (s === 429) { const e = apiErr("rate_limited", "เรียก DeepSeek ถี่เกินไป — รอสักครู่แล้วลองใหม่"); e.transient = true; return e; }
-    if (s === 503) { const e = apiErr("overloaded", "เซิร์ฟเวอร์ DeepSeek มีคนใช้เยอะ — รอสักครู่แล้วลองใหม่"); e.transient = true; return e; }
-    if (s >= 500) { const e = apiErr("server", "เซิร์ฟเวอร์ DeepSeek ขัดข้อง ลองใหม่อีกครั้ง"); e.transient = true; return e; }
-    return apiErr(s === 400 || s === 422 ? "bad_request" : "http_" + s, "DeepSeek: " + (msg || "HTTP " + s));
+    try { const j = await res.json(); msg = String((j.error && (j.error.message || j.error)) || j.message || ""); } catch (e) { }
+    const n = ALT[p].name, s = res.status;
+    if (s === 401) return apiErr("bad_key", n + " API key ไม่ถูกต้อง");
+    if (s === 402) return apiErr("no_balance", ALT[p].free
+      ? n + ": รุ่นนี้ไม่ฟรี — เลือกรุ่นที่ลงท้าย :free ในตั้งค่า"
+      : "ยอดเงินใน " + n + " หมด — เติมเงินที่ " + ALT[p].keyUrl.split(" ")[0]);
+    if (s === 403) return apiErr("forbidden", n + ": ไม่มีสิทธิ์ใช้รุ่นนี้" + (msg ? " (" + msg + ")" : ""));
+    if (s === 404) return apiErr("no_model", n + ": ไม่พบโมเดล " + altModel(p) + " — เปิดตั้งค่าแล้วกด 🔄 โหลดรายชื่อโมเดล");
+    if (s === 413) return apiErr("rate_limited", n + ": ข้อความยาวเกินโควตาฟรีต่อนาที — ลองเทิร์นสั้นลง หรือใช้เจ้าอื่น");
+    if (s === 429) {
+      const daily = /day|daily|free-models-per-day/i.test(msg);
+      const e = apiErr(daily ? "no_quota" : "rate_limited", daily
+        ? n + ": โควตาฟรีของวันนี้หมดแล้ว — ใช้เจ้าอื่นก่อน"
+        : n + ": เรียกถี่เกินโควตาฟรี — รอสักครู่แล้วลองใหม่");
+      e.transient = !daily;
+      return e;
+    }
+    if (s === 503) { const e = apiErr("overloaded", "เซิร์ฟเวอร์ " + n + " มีคนใช้เยอะ — รอสักครู่แล้วลองใหม่"); e.transient = true; return e; }
+    if (s >= 500) { const e = apiErr("server", "เซิร์ฟเวอร์ " + n + " ขัดข้อง ลองใหม่อีกครั้ง"); e.transient = true; return e; }
+    return apiErr(s === 400 || s === 422 ? "bad_request" : "http_" + s, n + ": " + (msg || "HTTP " + s));
   }
 
-  async function deepseek({ system, turns, onText, onStatus, temperature, maxTokens, signal, model, quiet }) {
-    if (!settings.dsKey) throw apiErr("no_key", "ยังไม่ได้ตั้งค่า DeepSeek API key");
-    const m = model && /^deepseek/.test(model) ? model : (settings.dsModel || DS_DEFAULT_MODEL);
+  async function altChat(p, { system, turns, onText, onStatus, temperature, maxTokens, signal, model, quiet }) {
+    const cfg = ALT[p];
+    const key = altKey(p);
+    if (!key) throw apiErr("no_key", "ยังไม่ได้ตั้งค่า " + cfg.name + " API key");
+    // a Gemini model name passed by the caller (e.g. for summaries) means nothing here
+    const m = model && ALT[p].models.some(x => x.id === model) ? model : altModel(p);
     const body = {
       model: m,
-      messages: dsMessages(system, turns),
+      messages: chatMessages(system, turns),
       stream: true,
-      max_tokens: Math.min(maxTokens || 8192, dsMaxOut(m)),
+      max_tokens: Math.min(maxTokens || 8192, altMaxOut(p, m)),
     };
-    if (!/reasoner/.test(m)) body.temperature = temperature == null ? 0.9 : temperature;   // R1 ignores it
+    if (!(p === "deepseek" && /reasoner/.test(m))) body.temperature = temperature == null ? 0.9 : temperature;   // R1 ignores it
 
     let res;
     for (let attempt = 0; ; attempt++) {
       try {
-        res = await fetch(DS_API + "chat/completions", {
+        res = await fetch(cfg.base + "chat/completions", {
           method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: "Bearer " + settings.dsKey },
+          headers: Object.assign({ "Content-Type": "application/json", Authorization: "Bearer " + key }, cfg.headers || {}),
           body: JSON.stringify(body),
           signal,
         });
       } catch (e) {
         if (e && e.name === "AbortError") throw apiErr("aborted", "ยกเลิกแล้ว");
-        throw apiErr("network", "เชื่อมต่อ DeepSeek ไม่ได้ — ตรวจสอบอินเทอร์เน็ต");
+        throw apiErr("network", "เชื่อมต่อ " + cfg.name + " ไม่ได้ — ตรวจสอบอินเทอร์เน็ต");
       }
       if (res.ok) break;
-      const err = await dsError(res);
+      const err = await altError(p, res);
       if (err.transient && attempt < 1 && !quiet) {
         if (onStatus) onStatus(3, attempt + 1, "busy");
         await waitFor(3000, signal);
@@ -533,17 +594,18 @@
       buf = lines.pop();
       for (const line of lines) {
         const s = line.trim();
-        if (!s.startsWith("data:")) continue;          // ": keep-alive" and blanks
+        if (!s.startsWith("data:")) continue;          // ": keep-alive", ": OPENROUTER PROCESSING", blanks
         const payload = s.slice(5).trim();
         if (!payload || payload === "[DONE]") continue;
         let j;
         try { j = JSON.parse(payload); } catch (e) { continue; }
+        if (j.error) throw apiErr("server", cfg.name + ": " + (j.error.message || "ขัดข้องระหว่างส่งข้อมูล"));
         const c = j.choices && j.choices[0];
         if (!c) continue;
         if (c.finish_reason) finish = c.finish_reason;
         const d = c.delta || {};
-        // R1 thinks out loud first — never shown, just say it is thinking
-        if (d.reasoning_content && !full && !thinking) { thinking = true; if (onStatus) onStatus(0, 0, "thinking"); }
+        // reasoning models think out loud first — never shown, just say so
+        if ((d.reasoning_content || d.reasoning) && !full && !thinking) { thinking = true; if (onStatus) onStatus(0, 0, "thinking"); }
         if (typeof d.content === "string" && d.content) {
           full += d.content;
           if (onText) onText(full);
@@ -551,53 +613,68 @@
       }
     }
     if (!full.trim()) {
-      if (finish === "content_filter") throw apiErr("blocked", "DeepSeek ไม่ยอมเขียนเนื้อหานี้ ลองเปลี่ยนคำสั่ง");
-      if (finish === "length") throw apiErr("truncated", "DeepSeek ใช้ token หมดตอนคิด — ลองใหม่ หรือเปลี่ยนเป็น DeepSeek V3");
-      throw apiErr("empty", "DeepSeek ไม่ได้ตอบอะไรกลับมา ลองใหม่อีกครั้ง");
+      if (finish === "content_filter") throw apiErr("blocked", cfg.name + " ไม่ยอมเขียนเนื้อหานี้ ลองเปลี่ยนคำสั่ง");
+      if (finish === "length") throw apiErr("truncated", cfg.name + " ใช้ token หมดก่อนเขียน — ลองใหม่ หรือเปลี่ยนรุ่น");
+      throw apiErr("empty", cfg.name + " ไม่ได้ตอบอะไรกลับมา ลองใหม่อีกครั้ง");
     }
     return { text: full, finishReason: finish === "length" ? "MAX_TOKENS" : finish === "stop" ? "STOP" : finish };
   }
 
-  // Key check without spending anything: list models + read the balance.
-  async function dsCheck(key) {
+  // Key check that costs nothing: list the models (+ DeepSeek's balance).
+  async function altCheck(p, key) {
+    const cfg = ALT[p];
     let r;
-    try { r = await fetch(DS_API + "models", { headers: { Authorization: "Bearer " + key } }); }
-    catch (e) { throw apiErr("network", "เชื่อมต่อ DeepSeek ไม่ได้ — ตรวจสอบอินเทอร์เน็ต"); }
-    if (!r.ok) throw await dsError(r);
-    const models = ((await r.json()).data || []).map(x => x.id).filter(Boolean);
+    try { r = await fetch(cfg.base + "models", { headers: { Authorization: "Bearer " + key } }); }
+    catch (e) { throw apiErr("network", "เชื่อมต่อ " + cfg.name + " ไม่ได้ — ตรวจสอบอินเทอร์เน็ต"); }
+    if (!r.ok) throw await altError(p, r);
+    let models = ((await r.json()).data || []).filter(x => x && x.id);
+    if (cfg.freeOnly) models = models.filter(x => /:free$/.test(x.id) || x.id === "openrouter/free" ||
+      (x.pricing && +x.pricing.prompt === 0 && +x.pricing.completion === 0));
+    if (p === "groq") models = models.filter(x => !/whisper|tts|guard|playai|orpheus/i.test(x.id));
+    if (p === "mistral") models = models.filter(x => !/embed|moderation|ocr|voxtral|codestral-embed/i.test(x.id));
     let balance = "";
-    try {
-      const b = await fetch(DS_API + "user/balance", { headers: { Authorization: "Bearer " + key } });
-      if (b.ok) {
-        const j = await b.json();
-        const i = (j.balance_infos || [])[0];
-        if (i) balance = i.total_balance + " " + i.currency;
-        if (j.is_available === false) balance += " (ยอดไม่พอใช้งาน)";
-      }
-    } catch (e) { }
-    return { models, balance };
+    if (cfg.balance) {
+      try {
+        const b = await fetch(cfg.base + "user/balance", { headers: { Authorization: "Bearer " + key } });
+        if (b.ok) {
+          const j = await b.json();
+          const i = (j.balance_infos || [])[0];
+          if (i) balance = i.total_balance + " " + i.currency;
+          if (j.is_available === false) balance += " (ยอดไม่พอใช้งาน)";
+        }
+      } catch (e) { }
+    }
+    return { models: models.map(x => x.id), balance };
   }
 
   // ============================================================
-  // Provider switch: every AI call goes through llm(). The main provider
-  // is chosen in settings; when it fails, offer (or use) the other one.
+  // Provider switch: every AI call goes through llm(). A main provider
+  // and a backup are chosen in settings; when the main one fails, offer
+  // (or use) the backup.
   // ============================================================
-  const PROVIDER_NAME = { gemini: "Gemini", deepseek: "DeepSeek" };
-  let sessionProvider = null;       // "use the other one until the app closes"
+  let sessionProvider = null;       // "use the backup until the app closes"
   let pendingSwitch = null;         // resolver of the open ask-dialog
-  const otherProvider = (p) => p === "deepseek" ? "gemini" : "deepseek";
-  const hasKey = (p) => p === "deepseek" ? !!settings.dsKey : !!settings.apiKey;
-  const hasAnyKey = () => hasKey("gemini") || hasKey("deepseek");
-  const mainProvider = () => settings.provider === "deepseek" ? "deepseek" : "gemini";
+  const hasKey = (p) => p === "gemini" ? !!settings.apiKey : !!altKey(p);
+  const hasAnyKey = () => PROVIDERS.some(hasKey);
+  const validProvider = (p) => PROVIDERS.indexOf(p) >= 0;
+  const mainProvider = () => validProvider(settings.provider) ? settings.provider : "gemini";
   const activeProvider = () => sessionProvider || mainProvider();
-  const providerLabel = (p) => p === "deepseek"
-    ? ((DS_MODELS.find(m => m.id === settings.dsModel) || { label: settings.dsModel || "DeepSeek" }).label.split(" — ")[0])
-    : "Gemini";
-  // failures the other provider can fix (not "you pressed stop" or "that prompt was refused")
+  // the chosen backup when it is usable, else the first other provider with a key
+  function backupFor(p) {
+    if (validProvider(settings.backup) && settings.backup !== p && hasKey(settings.backup)) return settings.backup;
+    return PROVIDERS.find(x => x !== p && hasKey(x)) || null;
+  }
+  function providerLabel(p) {
+    if (p === "gemini") return "Gemini";
+    const m = altModel(p);
+    const known = ALT[p].models.find(x => x.id === m);
+    return ALT[p].name + " " + (known ? known.label.split(" — ")[0].replace(/^(Mistral|DeepSeek) /, "").replace(/ \(.*\)$/, "") : m.replace(/:free$/, ""));
+  }
+  // failures another provider can fix (not "you pressed stop" or "that prompt was refused")
   const OFFER_ON = { overloaded: 1, server: 1, rate_limited: 1, no_quota: 1, no_model: 1, network: 1,
     no_key: 1, bad_key: 1, forbidden: 1, no_balance: 1, truncated: 1, empty: 1 };
 
-  function callProvider(p, opts) { return p === "deepseek" ? deepseek(opts) : gemini(opts); }
+  function callProvider(p, opts) { return p === "gemini" ? gemini(opts) : altChat(p, opts); }
 
   function askSwitch(from, to, err, signal) {
     return new Promise((resolve) => {
@@ -616,15 +693,15 @@
   }
 
   async function llm(opts) {
-    const first = activeProvider();
-    const alt = otherProvider(first);
-    // no key for the main one at all, but the other is set up: just use it
-    if (!hasKey(first) && hasKey(alt)) return callProvider(alt, opts);
+    let first = activeProvider();
+    // no key for the main one, but another is set up: just use that
+    if (!hasKey(first)) { const any = backupFor(first); if (any) first = any; }
     try {
       return await callProvider(first, opts);
     } catch (e) {
+      const alt = backupFor(first);
       const mode = settings.fallback || "ask";
-      if (!OFFER_ON[e.code] || !hasKey(alt) || mode === "off") throw e;
+      if (!OFFER_ON[e.code] || !alt || mode === "off") throw e;
       if (opts.signal && opts.signal.aborted) throw e;
       let choice = "once";
       if (mode === "ask") {
@@ -635,7 +712,6 @@
       if (choice === "session") { sessionProvider = alt; renderProviderNote(); }
       if (!opts.quiet) toast("🔀 ใช้ " + providerLabel(alt) + " แทน " + PROVIDER_NAME[first] +
         (choice === "session" ? " จนกว่าจะปิดแอป" : ""), 3500);
-      if (opts.onSwitch) opts.onSwitch(alt);
       return callProvider(alt, opts);
     }
   }
@@ -1037,7 +1113,7 @@
         maxTokens: ep ? EP_MAX_TOKENS : undefined,
         signal: currentAbort.signal,
         onStatus: (sec, n, why) => {
-          if (why === "thinking") { bubble.textContent = "🧠 " + providerLabel("deepseek") + " กำลังคิดก่อนเขียน…"; return; }
+          if (why === "thinking") { bubble.textContent = "🧠 " + providerLabel(activeProvider()) + " กำลังคิดก่อนเขียน…"; return; }
           bubble.textContent = (why === "busy"
             ? "⏳ เซิร์ฟเวอร์ Gemini มีคนใช้เยอะ — รอ " + sec + " วินาทีแล้วลองใหม่/สลับโมเดลให้อัตโนมัติ"
             : "⏳ โควตาต่อนาทีเต็ม — รอ " + sec + " วินาทีแล้วลองให้อัตโนมัติ") + " (ครั้งที่ " + n + ")…";
@@ -3899,83 +3975,116 @@
     openModal("settingsModal");
   }
 
-  function fillDsModels(current) {
-    const list = DS_MODELS.slice();
+  const PROVIDER_OPT = {
+    gemini: "Gemini (Google) — ฟรี", mistral: "Mistral — ฟรี", openrouter: "OpenRouter — ฟรี (รุ่น :free)",
+    groq: "Groq — ฟรี (เทิร์นสั้น)", deepseek: "DeepSeek — 💰 เสียเงิน",
+  };
+  let altPicked = "mistral";
+
+  function providerOptions(sel, current, withAuto) {
+    sel.innerHTML = (withAuto ? '<option value="">อัตโนมัติ — เจ้าแรกที่ใส่ key ไว้</option>' : "") +
+      PROVIDERS.map(p => '<option value="' + p + '">' + esc(PROVIDER_OPT[p]) + (hasKey(p) ? " ✅" : " (ยังไม่ใส่ key)") + "</option>").join("");
+    sel.value = current;
+  }
+
+  function fillAltModels(p, current, extra) {
+    const list = ALT[p].models.slice();
+    for (const id of (extra || [])) if (!list.some(m => m.id === id)) list.push({ id, label: id });
     if (current && !list.some(m => m.id === current)) list.push({ id: current, label: current });
-    $("dsModelSelect").innerHTML = list.map(m => '<option value="' + esc(m.id) + '">' + esc(m.label) + "</option>").join("");
-    $("dsModelSelect").value = current || DS_DEFAULT_MODEL;
+    $("altModelSelect").innerHTML = list.map(m => '<option value="' + esc(m.id) + '">' + esc(m.label) + "</option>").join("");
+    $("altModelSelect").value = current || ALT[p].def;
+  }
+
+  function fillAltPane() {
+    const p = altPicked, cfg = ALT[p];
+    $("altPick").innerHTML = Object.keys(ALT).map(id => '<option value="' + id + '">' +
+      esc(PROVIDER_OPT[id]) + (altKey(id) ? " ✅" : "") + "</option>").join("");
+    $("altPick").value = p;
+    $("altNote").innerHTML = "สมัคร/สร้าง key ที่ <b>" + esc(cfg.keyUrl) + "</b><br>" + esc(cfg.note);
+    $("altKeyInput").value = altKey(p);
+    $("altKeyInput").type = "password";
+    $("altToggleKeyBtn").textContent = "👁️";
+    fillAltModels(p, altModel(p));
+    $("altKeyStatus").textContent = altKey(p) ? "✅ ตั้งค่าแล้ว" : "⚠️ ยังไม่ได้ตั้งค่า (ไม่บังคับ)";
+    $("altKeyStatus").className = altKey(p) ? "keystat ok" : "keystat warn";
   }
 
   function fillProviderSettings() {
-    $("providerSelect").value = mainProvider();
+    providerOptions($("providerSelect"), mainProvider(), false);
+    providerOptions($("backupSelect"), validProvider(settings.backup) ? settings.backup : "", true);
     $("fallbackSelect").value = settings.fallback || "ask";
-    $("dsKeyInput").value = settings.dsKey || "";
-    fillDsModels(settings.dsModel || DS_DEFAULT_MODEL);
-    $("dsKeyStatus").textContent = settings.dsKey ? "✅ ตั้งค่าแล้ว" : "⚠️ ยังไม่ได้ตั้งค่า (ไม่บังคับ)";
-    $("dsKeyStatus").className = settings.dsKey ? "keystat ok" : "keystat warn";
+    fillAltPane();
     renderProviderNote();
+  }
+
+  async function saveAltMaps() {
+    await setSetting("altKeys", settings.altKeys);
+    await setSetting("altModels", settings.altModels);
   }
 
   function bindProvider() {
     $("providerSelect").onchange = async () => {
-      const p = $("providerSelect").value === "deepseek" ? "deepseek" : "gemini";
-      if (p === "deepseek" && !settings.dsKey && !$("dsKeyInput").value.trim()) toast("ใส่ DeepSeek API key ด้านล่างก่อน แล้วกดบันทึก", 3500);
+      const p = validProvider($("providerSelect").value) ? $("providerSelect").value : "gemini";
       settings.provider = p;
       sessionProvider = null;
+      if (!hasKey(p)) {
+        toast("ใส่ " + PROVIDER_NAME[p] + " API key ก่อน แล้วกดบันทึก", 3500);
+        if (ALT[p]) { altPicked = p; fillAltPane(); }
+      }
       renderProviderNote();
       try { await setSetting("provider", p); } catch (e) { }
       toast("เจ้าหลัก: " + PROVIDER_NAME[p]);
+    };
+    $("backupSelect").onchange = async () => {
+      settings.backup = $("backupSelect").value;
+      try { await setSetting("backup", settings.backup); } catch (e) { }
     };
     $("fallbackSelect").onchange = async () => {
       settings.fallback = $("fallbackSelect").value;
       try { await setSetting("fallback", settings.fallback); } catch (e) { }
     };
     $("providerNoteReset").onclick = () => { sessionProvider = null; renderProviderNote(); toast("กลับไปใช้ " + PROVIDER_NAME[mainProvider()]); };
-    $("dsSaveBtn").onclick = async () => {
-      settings.dsKey = $("dsKeyInput").value.trim();
-      settings.dsModel = $("dsModelSelect").value || DS_DEFAULT_MODEL;
-      await setSetting("dsKey", settings.dsKey);
-      await setSetting("dsModel", settings.dsModel);
+    $("altPick").onchange = () => { altPicked = ALT[$("altPick").value] ? $("altPick").value : "mistral"; fillAltPane(); };
+    $("altSaveBtn").onclick = async () => {
+      const p = altPicked;
+      settings.altKeys[p] = $("altKeyInput").value.trim();
+      settings.altModels[p] = $("altModelSelect").value || ALT[p].def;
+      await saveAltMaps();
       fillProviderSettings();
-      toast("บันทึกการตั้งค่า DeepSeek แล้ว");
+      toast("บันทึกการตั้งค่า " + ALT[p].name + " แล้ว");
     };
-    $("dsTestBtn").onclick = async () => {
-      const btn = $("dsTestBtn"), prev = btn.textContent;
-      const key = $("dsKeyInput").value.trim();
-      if (!key) { toast("ใส่ DeepSeek API key ก่อน"); return; }
+    $("altTestBtn").onclick = async () => {
+      const p = altPicked, btn = $("altTestBtn"), prev = btn.textContent;
+      const key = $("altKeyInput").value.trim();
+      if (!key) { toast("ใส่ " + ALT[p].name + " API key ก่อน"); return; }
       btn.disabled = true; btn.textContent = "กำลังทดสอบ…";
       try {
-        const r = await dsCheck(key);
-        const want = $("dsModelSelect").value;
-        if (r.models.length) {
-          fillDsModels(want);
-          for (const id of r.models) if (![...$("dsModelSelect").options].some(o => o.value === id)) {
-            $("dsModelSelect").insertAdjacentHTML("beforeend", '<option value="' + esc(id) + '">' + esc(id) + "</option>");
-          }
-          $("dsModelSelect").value = want;
-        }
+        const r = await altCheck(p, key);
+        const want = $("altModelSelect").value;
+        fillAltModels(p, want, r.models);
         const missing = r.models.length && r.models.indexOf(want) < 0;
-        $("dsKeyStatus").textContent = (missing ? "⚠️ key ใช้ได้ แต่ไม่พบโมเดล " + want + " — เลือกรุ่นอื่น" : "✅ ใช้งานได้") +
-          (r.balance ? " · ยอดคงเหลือ " + r.balance : "") + " — กดบันทึก";
-        $("dsKeyStatus").className = missing ? "keystat warn" : "keystat ok";
+        $("altKeyStatus").textContent = (missing ? "⚠️ key ใช้ได้ แต่ไม่พบโมเดล " + want + " — เลือกรุ่นอื่นจากรายการ" : "✅ ใช้งานได้") +
+          " · พบ " + r.models.length + " รุ่น" + (r.balance ? " · ยอดคงเหลือ " + r.balance : "") + " — กดบันทึก";
+        $("altKeyStatus").className = missing ? "keystat warn" : "keystat ok";
       } catch (e) {
-        $("dsKeyStatus").textContent = "❌ " + (e.message || "ทดสอบไม่ผ่าน");
-        $("dsKeyStatus").className = "keystat warn";
+        $("altKeyStatus").textContent = "❌ " + (e.message || "ทดสอบไม่ผ่าน");
+        $("altKeyStatus").className = "keystat warn";
       }
       btn.disabled = false; btn.textContent = prev;
     };
-    $("dsClearBtn").onclick = async () => {
-      if (!confirm("ลบ DeepSeek API key ออกจากเครื่องนี้?")) return;
-      settings.dsKey = "";
-      await setSetting("dsKey", "");
-      if (sessionProvider === "deepseek") sessionProvider = null;
+    $("altClearBtn").onclick = async () => {
+      const p = altPicked;
+      if (!confirm("ลบ " + ALT[p].name + " API key ออกจากเครื่องนี้?")) return;
+      settings.altKeys[p] = "";
+      await saveAltMaps();
+      if (sessionProvider === p) sessionProvider = null;
       fillProviderSettings();
-      toast("ลบ DeepSeek key แล้ว");
+      toast("ลบ " + ALT[p].name + " key แล้ว");
     };
-    $("dsToggleKeyBtn").onclick = () => {
-      const i = $("dsKeyInput");
+    $("altToggleKeyBtn").onclick = () => {
+      const i = $("altKeyInput");
       i.type = i.type === "password" ? "text" : "password";
-      $("dsToggleKeyBtn").textContent = i.type === "password" ? "👁️" : "🙈";
+      $("altToggleKeyBtn").textContent = i.type === "password" ? "👁️" : "🙈";
     };
   }
   function bindSettings() {
@@ -4067,9 +4176,17 @@
     settings.epCount = [0, 1, 3, 5, 10].indexOf(epc) >= 0 ? epc : 3;
     settings.epVoice = String(await getSetting("epVoice", "0")) === "1";
     settings.trTo = String(await getSetting("trTo", "auto"));
-    settings.provider = String(await getSetting("provider", "gemini")) === "deepseek" ? "deepseek" : "gemini";
-    settings.dsKey = await getSetting("dsKey", "") || "";
-    settings.dsModel = await getSetting("dsModel", DS_DEFAULT_MODEL) || DS_DEFAULT_MODEL;
+    settings.provider = String(await getSetting("provider", "gemini"));
+    if (!validProvider(settings.provider)) settings.provider = "gemini";
+    settings.backup = String(await getSetting("backup", "") || "");
+    settings.altKeys = Object.assign({}, await getSetting("altKeys", null) || {});
+    settings.altModels = Object.assign({}, await getSetting("altModels", null) || {});
+    const oldDs = await getSetting("dsKey", "");       // DeepSeek-only settings of the previous version
+    if (oldDs && !settings.altKeys.deepseek) {
+      settings.altKeys.deepseek = oldDs;
+      settings.altModels.deepseek = await getSetting("dsModel", "") || ALT.deepseek.def;
+      try { await setSetting("altKeys", settings.altKeys); await setSetting("altModels", settings.altModels); await setSetting("dsKey", ""); } catch (e) { }
+    }
     settings.fallback = await getSetting("fallback", "ask") || "ask";
     const lp = await getSetting("libPrefs", null);
     if (lp && typeof lp === "object") Object.assign(lib, lp, { page: 1 });

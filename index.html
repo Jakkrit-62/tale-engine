@@ -486,10 +486,9 @@
     <div class="modalhead"><b>⚙️ ตั้งค่า</b><button data-close class="x">✕</button></div>
     <div class="modalbody">
       <label class="lbl">ผู้ให้บริการ AI หลัก</label>
-      <select id="providerSelect">
-        <option value="gemini">Gemini (Google) — มีโควตาฟรี</option>
-        <option value="deepseek">DeepSeek — จ่ายตามใช้ ราคาถูก</option>
-      </select>
+      <select id="providerSelect"></select>
+      <label class="lbl">ตัวสำรอง</label>
+      <select id="backupSelect"></select>
       <label class="lbl">ถ้าเจ้าหลักใช้ไม่ได้ (เช่น 503 คนใช้เยอะ / โควตาหมด)</label>
       <select id="fallbackSelect">
         <option value="ask">ถามก่อนว่าจะใช้อีกเจ้าไหม</option>
@@ -527,25 +526,25 @@
       </div>
       <button id="clearKeyBtn" class="danger full" style="margin-top:8px">🗑️ ลบ API key ออกจากเครื่อง</button>
 
-      <div class="provhead">🐋 DeepSeek</div>
-      <label class="lbl">DeepSeek API key</label>
+      <div class="provhead">🔑 เจ้าอื่น ๆ (สำรอง หรือใช้เป็นหลัก)</div>
+      <label class="lbl">ตั้งค่า key ของ</label>
+      <select id="altPick"></select>
+      <div id="altNote" class="note"></div>
+      <label class="lbl">API key</label>
       <div class="keyrow">
-        <input type="password" id="dsKeyInput" placeholder="sk-… (เว้นว่างได้ ถ้าไม่ใช้)" autocomplete="off" spellcheck="false">
-        <button id="dsToggleKeyBtn" class="ghost sq">👁️</button>
+        <input type="password" id="altKeyInput" placeholder="วาง API key (เว้นว่างได้ ถ้าไม่ใช้)" autocomplete="off" spellcheck="false">
+        <button id="altToggleKeyBtn" class="ghost sq">👁️</button>
       </div>
-      <div id="dsKeyStatus" class="keystat warn">⚠️ ยังไม่ได้ตั้งค่า</div>
-      <label class="lbl">โมเดล DeepSeek</label>
-      <select id="dsModelSelect"></select>
-      <div class="note">
-        สมัครและเติมเงินที่ <b>platform.deepseek.com</b> → API keys → Create — DeepSeek <b>ไม่มีโควตาฟรี</b>
-        ต้องเติมเงินก่อน (หลักสิบบาทก็เขียนได้หลายตอน) · <b>R1</b> คิดก่อนเขียน ตอบช้ากว่าแต่วางเรื่องดี
-        · <b>V3</b> เร็วและถูกกว่า · key เก็บในเครื่องนี้เท่านั้น ส่งตรงไป DeepSeek
-      </div>
+      <div id="altKeyStatus" class="keystat warn">⚠️ ยังไม่ได้ตั้งค่า</div>
+      <label class="lbl">โมเดล</label>
+      <select id="altModelSelect"></select>
+      <div class="note">key ทุกเจ้าเก็บในเครื่องนี้เท่านั้น ส่งตรงไปเจ้านั้น · ไม่ถูกอัปโหลดขึ้น Google Drive
+        · กด 🔌 ทดสอบ เพื่อเช็ก key และโหลดรายชื่อรุ่นล่าสุด (ไม่เสียโควตา)</div>
       <div class="row2" style="margin-top:14px">
-        <button id="dsTestBtn" class="ghost">🔌 ทดสอบ DeepSeek</button>
-        <button id="dsSaveBtn" class="primary">บันทึก</button>
+        <button id="altTestBtn" class="ghost">🔌 ทดสอบ + โหลดรุ่น</button>
+        <button id="altSaveBtn" class="primary">บันทึก</button>
       </div>
-      <button id="dsClearBtn" class="danger full" style="margin-top:8px">🗑️ ลบ DeepSeek key</button>
+      <button id="altClearBtn" class="danger full" style="margin-top:8px">🗑️ ลบ key ของเจ้านี้</button>
     </div>
   </div>
 </div>
