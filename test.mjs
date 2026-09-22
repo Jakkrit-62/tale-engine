@@ -367,12 +367,12 @@ $("exportModal").querySelector("[data-close]").click(); await settle(5);
 results.push("[15] Save slots & persistence");
 $("openDrawer").click(); await settle(5);
 $("slotsBtn").click(); await settle(30);
-check("slots modal lists current game", $("slotsList").querySelectorAll(".slotcard").length >= 1,
-  "slots=" + $("slotsList").querySelectorAll(".slotcard").length);
-check("current game marked", $("slotsList").querySelector(".slotcard.current") !== null);
+check("library lists current game", $("library").style.display === "block" && $("libGrid").querySelectorAll(".libcard").length >= 1,
+  "cards=" + $("libGrid").querySelectorAll(".libcard").length);
+check("current game marked", $("libGrid").querySelector(".libcard.current") !== null);
 
 // create a 2nd game
-$("slotNew").click(); await settle(10);
+$("libNew").click(); await settle(10);
 check("new game returns to setup", $("setup").style.display === "block");
 check("setup form cleared", $("setupName").value === "" && $("setupTitle").value === "");
 $("setupName").value = "Mira";
@@ -383,13 +383,13 @@ check("second game started", $("headerTitle").textContent === "เรื่อ�
 
 $("openDrawer").click(); await settle(5);
 $("slotsBtn").click(); await settle(30);
-check("two saves listed", $("slotsList").querySelectorAll(".slotcard").length === 2,
-  "slots=" + $("slotsList").querySelectorAll(".slotcard").length);
+check("two saves listed", $("libGrid").querySelectorAll(".libcard").length === 2,
+  "cards=" + $("libGrid").querySelectorAll(".libcard").length);
 
 // switch back to game 1
-const loadBtns = Array.from($("slotsList").querySelectorAll(".slotcard"))
+const loadBtns = Array.from($("libGrid").querySelectorAll(".libcard"))
   .filter(c => !c.classList.contains("current"));
-loadBtns[0].querySelector("button").click();
+loadBtns[0].querySelector('[data-act="read"]').click();
 await settle(40);
 check("switched to other save", $("headerTitle").textContent === "ตำนานดาบเงา", $("headerTitle").textContent);
 check("log restored from save", $("log").querySelectorAll(".msg.ai").length > 3,

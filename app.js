@@ -157,7 +157,7 @@
   // Gemini API
   // ============================================================
   let settings = { apiKey: "", model: DEFAULT_MODEL, ttsRate: 0.85, ttsPitch: 1, ttsFollow: true,
-    epCount: 3, epVoice: false };
+    epCount: 3, epVoice: false, trTo: "auto" };
 
   function mapTurns(turns) {
     // Gemini wants role "user" | "model"; merge consecutive same-role turns.
@@ -834,6 +834,7 @@
         // reuse the row created for the live reader; rebind it to the final text
         const b = toolsRow.querySelector("button");
         if (b) b.onclick = () => readAloud(bubble, narrative, b);
+        toolsRow.trText = narrative;
         if (words) addWordCount(toolsRow, words);
       } else {
         $("log").appendChild(aiTools(bubble, narrative, words));
@@ -1840,6 +1841,15 @@
       btn.onclick = () => readAloud(bubble, text, btn);
       row.appendChild(btn);
     }
+    // the live reader builds this row before the text exists; the final
+    // text is handed over through row.trText once the turn lands
+    row.trText = text;
+    const tr = document.createElement("button");
+    tr.type = "button";
+    tr.className = "trbtn";
+    tr.textContent = "🌐 แปล";
+    tr.onclick = () => toggleTranslation(row, tr);
+    row.appendChild(tr);
     if (words) addWordCount(row, words);
     return row;
   }
@@ -2127,7 +2137,7 @@
   // Screens
   // ============================================================
   function show(screen) {
-    for (const s of ["boot", "setup", "game"]) {
+    for (const s of ["boot", "setup", "library", "game"]) {
       $(s).style.display = (s === screen) ? (s === "game" ? "flex" : "block") : "none";
     }
   }
@@ -2216,7 +2226,7 @@
     };
 
     $("setupSettingsBtn").onclick = openSettings;
-    $("setupSlotsBtn").onclick = openSlots;
+    $("setupSlotsBtn").onclick = openLibrary;
   }
 
   function resetSetupForm() {
@@ -2459,7 +2469,7 @@
     $("editStateBtn").onclick = openStateEditor;
     $("chaptersBtn").onclick = openChapters;
     $("exportBtn").onclick = openExport;
-    $("slotsBtn").onclick = openSlots;
+    $("slotsBtn").onclick = openLibrary;
     $("settingsBtn").onclick = openSettings;
     $("newGameBtn").onclick = async () => {
       if (!confirm("เริ่มการผจญภัยใหม่? (เกมปัจจุบันยังถูกเก็บไว้ใน 'เกมที่บันทึกไว้')")) return;
@@ -2718,84 +2728,451 @@
     };
     $("impJson").onchange = async (e) => {
       const f = e.target.files && e.target.files[0];
-      if (!f) return;
-      try {
-        const txt = await f.text();
-        const obj = JSON.parse(txt);
-        if (!obj || typeof obj !== "object" || !Array.isArray(obj.log)) throw new Error("รูปแบบไฟล์ไม่ถูกต้อง");
-        const restored = defaultState(obj);
-        restored.id = uid(); // import as a new slot, never overwrite
-        restored.title = (restored.title || restored.name) + " (นำเข้า)";
-        restored.autoPlay = false;
-        stopEpisodes();
-        await dbPut(STORE_SAVES, restored);
-        state = restored;
-        await setSetting("lastSave", state.id);
-        closeModals();
-        show("game"); renderAll();
-        toast("นำเข้าเซฟสำเร็จ");
-      } catch (err) {
-        toast("นำเข้าไม่สำเร็จ: " + (err.message || "ไฟล์เสียหาย"));
-      }
       e.target.value = "";
+      if (f) await importSave(f);
     };
   }
 
-  // ---------- Save slots ----------
-  async function openSlots() {
-    const box = $("slotsList");
-    box.innerHTML = '<div class="dim">กำลังโหลด…</div>';
-    openModal("slotsModal");
-    let all = [];
-    try { all = await dbAll(STORE_SAVES); } catch (e) { box.innerHTML = '<div class="dim">โหลดรายการไม่สำเร็จ</div>'; return; }
-    all.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-    if (!all.length) { box.innerHTML = '<div class="dim" style="padding:12px 0">ยังไม่มีเกมที่บันทึกไว้</div>'; return; }
-    box.innerHTML = "";
-    for (const s of all) {
-      const card = document.createElement("div");
-      card.className = "slotcard" + (state && s.id === state.id ? " current" : "");
-      const info = document.createElement("div");
-      info.className = "slotinfo";
-      info.innerHTML = "<b>" + esc(s.title || s.name) + "</b>" +
-        (state && s.id === state.id ? ' <span class="pill">กำลังเล่น</span>' : "") +
-        '<div class="dim">' + esc((s.mode || "rpg").toUpperCase()) +
-        (s.lang === "en" ? " · EN" + (s.study ? " 📚" : "") : "") + " · Lv." + (s.level || 1) +
-        " · " + (s.log ? s.log.length : 0) + " รายการ · " + fmtDate(s.updatedAt || s.createdAt || now()) + "</div>";
-      const btns = document.createElement("div");
-      btns.className = "slotbtns";
-      const load = document.createElement("button");
-      load.textContent = "เปิด";
-      load.disabled = !!(state && s.id === state.id);
-      load.onclick = async () => {
-        if (busy) { toast("รอให้เทิร์นปัจจุบันจบก่อน"); return; }
-        stopEpisodes();
-        await persist(true);
-        state = defaultState(s);
-        await setSetting("lastSave", state.id);
-        closeModals(); closeDrawer();
-        show("game"); renderAll();
-        toast("เปิดเกม: " + (state.title || state.name));
-      };
-      const del = document.createElement("button");
-      del.textContent = "🗑️";
-      del.className = "danger";
-      del.onclick = async () => {
-        if (!confirm("ลบเกม \"" + (s.title || s.name) + "\" ถาวร?")) return;
-        await dbDel(STORE_SAVES, s.id);
-        if (state && state.id === s.id) { state = null; resetSetupForm(); show("setup"); closeModals(); }
-        else openSlots();
-        toast("ลบแล้ว");
-      };
-      btns.appendChild(load); btns.appendChild(del);
-      card.appendChild(info); card.appendChild(btns);
-      box.appendChild(card);
+  // A save file becomes a new story — never overwrites the one it came from.
+  async function importSave(f) {
+    try {
+      const txt = await f.text();
+      const obj = JSON.parse(txt);
+      if (!obj || typeof obj !== "object" || !Array.isArray(obj.log)) throw new Error("รูปแบบไฟล์ไม่ถูกต้อง");
+      const restored = defaultState(obj);
+      restored.id = uid(); // import as a new slot, never overwrite
+      restored.title = (restored.title || restored.name) + " (นำเข้า)";
+      restored.autoPlay = false;
+      stopEpisodes();
+      if (state) await persist(true);
+      await dbPut(STORE_SAVES, restored);
+      state = restored;
+      await setSetting("lastSave", state.id);
+      closeModals();
+      show("game"); renderAll();
+      toast("นำเข้าเซฟสำเร็จ");
+    } catch (err) {
+      toast("นำเข้าไม่สำเร็จ: " + (err.message || "ไฟล์เสียหาย"));
     }
   }
-  function bindSlots() {
-    $("slotNew").onclick = () => {
-      stopEpisodes();
-      closeModals(); closeDrawer();
-      state = null; resetSetupForm(); show("setup");
+
+  // ============================================================
+  // Library (คลังนิยาย) — every save as a book card, with search,
+  // filters, sort and pages, in the style of web-novel list sites.
+  // ============================================================
+  const LIB_PAGE = 10;
+  const GENRES = {
+    rpg: { label: "RPG", icon: "⚔️" },
+    story: { label: "Story", icon: "📖" },
+    dnd: { label: "D&D", icon: "🎲" },
+    cultivation: { label: "บ่มเพาะ", icon: "☯️" },
+  };
+  const LIB_DEFAULTS = { q: "", genre: "", status: "", lang: "", sort: "updated", desc: true };
+  const lib = Object.assign({ page: 1 }, LIB_DEFAULTS);
+  let libSaves = [];
+  const libMetaCache = new Map();   // id → { t: updatedAt, meta }
+
+  // Everything a card shows, computed once per save version (a long story
+  // is hundreds of KB — word counts and search text are not free).
+  function libMeta(s) {
+    const hit = libMetaCache.get(s.id);
+    if (hit && hit.t === s.updatedAt) return hit.meta;
+    const log = Array.isArray(s.log) ? s.log : [];
+    let eps = 0, turns = 0, words = 0, lastHead = "";
+    for (const m of log) {
+      if (m.role !== "assistant") continue;
+      turns++;
+      if (m.ep) {
+        eps++;
+        lastHead = String(m.content || "").split("\n")[0].replace(/[#*]/g, "").trim();
+      }
+      words += m.words || countWords(m.content);
+    }
+    const meta = {
+      eps, turns, words, lastHead,
+      chapters: eps || turns,
+      unit: eps ? "ตอน" : "เทิร์น",
+      title: s.title || s.name || "ไม่มีชื่อ",
+      desc: String(s.world || s.charDesc || "").trim(),
+      search: [s.title, s.name, s.charDesc, s.world, s.location, s.realm,
+        (s.chapters || []).map(c => c.summary).join(" ")].join(" ").toLowerCase(),
+    };
+    libMetaCache.set(s.id, { t: s.updatedAt, meta });
+    return meta;
+  }
+
+  const libStatus = (s) => s.status === "completed" ? "completed" : "ongoing";
+  const libLang = (s) => s.lang === "en" ? "en" : "th";
+
+  function libFiltered() {
+    const q = lib.q.trim().toLowerCase();
+    const list = libSaves.filter(s =>
+      (!lib.genre || (s.mode || "rpg") === lib.genre) &&
+      (!lib.status || libStatus(s) === lib.status) &&
+      (!lib.lang || libLang(s) === lib.lang) &&
+      (!q || libMeta(s).search.includes(q)));
+    const key = {
+      updated: (s) => s.updatedAt || 0,
+      created: (s) => s.createdAt || 0,
+      chapters: (s) => libMeta(s).chapters,
+      words: (s) => libMeta(s).words,
+      level: (s) => s.level || 0,
+    }[lib.sort];
+    list.sort(key
+      ? (a, b) => key(a) - key(b)
+      : (a, b) => libMeta(a).title.localeCompare(libMeta(b).title, "th", { numeric: true }));
+    if (lib.desc) list.reverse();
+    return list;
+  }
+
+  function timeAgo(t) {
+    const m = Math.floor((now() - (t || 0)) / 60000);
+    if (m < 1) return "เมื่อสักครู่";
+    if (m < 60) return m + " นาทีที่แล้ว";
+    if (m < 1440) return Math.floor(m / 60) + " ชม.ที่แล้ว";
+    if (m < 43200) return Math.floor(m / 1440) + " วันที่แล้ว";
+    return new Date(t).toLocaleDateString("th-TH", { dateStyle: "medium" });
+  }
+
+  // No cover images in a save, so each story gets a stable colour from its id.
+  function coverHue(id) {
+    let h = 0;
+    for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) % 3600;
+    return (h * 137) % 360;   // spread ids that differ by one character
+  }
+
+  async function openLibrary() {
+    if (busy) { toast("รอให้เทิร์นปัจจุบันจบก่อน"); return; }
+    stopEpisodes();
+    if (state) await persist(true);
+    closeModals(); closeDrawer();
+    try { libSaves = await dbAll(STORE_SAVES); }
+    catch (e) { libSaves = []; toast("โหลดรายการเรื่องไม่สำเร็จ"); }
+    lib.page = 1;
+    $("libBack").style.display = state ? "" : "none";
+    show("library");
+    syncLibControls();
+    renderLibrary();
+  }
+
+  function syncLibControls() {
+    $("libSearch").value = lib.q;
+    $("libGenre").value = lib.genre;
+    $("libStatus").value = lib.status;
+    $("libLang").value = lib.lang;
+    $("libSort").value = lib.sort;
+    $("libOrder").textContent = lib.desc ? "↓ มาก→น้อย" : "↑ น้อย→มาก";
+  }
+
+  function saveLibPrefs() {
+    const p = {};
+    for (const k of Object.keys(LIB_DEFAULTS)) if (k !== "q") p[k] = lib[k];
+    setSetting("libPrefs", p).catch(() => { });
+  }
+
+  function renderLibrary() {
+    const list = libFiltered();
+    const pages = Math.max(1, Math.ceil(list.length / LIB_PAGE));
+    lib.page = Math.min(Math.max(1, lib.page), pages);
+    const filtered = list.length !== libSaves.length;
+    $("libCount").textContent = libSaves.length
+      ? (filtered ? "พบ " + list.length + " จาก " + libSaves.length + " เรื่อง" : "ทั้งหมด " + libSaves.length + " เรื่อง")
+      : "";
+    const grid = $("libGrid");
+    grid.innerHTML = "";
+    if (!libSaves.length) {
+      grid.innerHTML = '<div class="libempty">ยังไม่มีเรื่องในคลัง<br><span class="dim sm">กด ✨ เรื่องใหม่ เพื่อเริ่มเรื่องแรก หรือนำเข้าไฟล์เซฟด้านล่าง</span></div>';
+    } else if (!list.length) {
+      grid.innerHTML = '<div class="libempty">ไม่พบเรื่องที่ตรงกับตัวกรอง<br><span class="dim sm">ลองลบคำค้นหรือกด “ล้างตัวกรอง”</span></div>';
+    }
+    for (const s of list.slice((lib.page - 1) * LIB_PAGE, lib.page * LIB_PAGE)) grid.appendChild(libCard(s));
+    renderPager(pages);
+  }
+
+  function libCard(s) {
+    const m = libMeta(s);
+    const g = GENRES[s.mode] || GENRES.rpg;
+    const current = !!(state && s.id === state.id);
+    const done = libStatus(s) === "completed";
+    const card = document.createElement("article");
+    card.className = "libcard" + (current ? " current" : "");
+    const hue = coverHue(s.id);
+    const tags = [g.icon + " " + g.label, libLang(s) === "en" ? "🇬🇧 English" : "🇹🇭 ไทย"];
+    if (s.study) tags.push("📚 เรียนภาษา " + (s.cefr || ""));
+    if (s.qidian) tags.push("📜 Qidian");
+    if (s.pov === "third") tags.push("บุรุษที่ 3");
+    card.innerHTML =
+      '<div class="libcover" style="--h:' + hue + '"><span class="libicon">' + g.icon + "</span>" +
+        '<span class="libctitle">' + esc(m.title) + "</span></div>" +
+      '<div class="libbody">' +
+        '<div class="libtop"><h2>' + esc(m.title) + "</h2>" +
+          '<span class="libst ' + (done ? "done" : "") + '">' + (done ? "จบแล้ว" : "กำลังเขียน") + "</span>" +
+          (current ? '<span class="pill">กำลังอ่าน</span>' : "") + "</div>" +
+        '<div class="libstats">' +
+          "<span>📖 " + m.chapters.toLocaleString("en-US") + " " + m.unit + "</span>" +
+          "<span>📝 ≈" + m.words.toLocaleString("en-US") + " คำ</span>" +
+          "<span>⭐ Lv." + (s.level || 1) + (s.realm ? " · " + esc(s.realm) : "") + "</span>" +
+          "<span>🕒 " + esc(timeAgo(s.updatedAt || s.createdAt)) + "</span></div>" +
+        '<div class="libtags">' + tags.map(t => "<span>" + esc(t) + "</span>").join("") + "</div>" +
+        (m.lastHead ? '<div class="liblast">ล่าสุด: ' + esc(m.lastHead) + "</div>" : "") +
+        (m.desc ? '<p class="libdesc">' + esc(m.desc) + "</p>" : "") +
+        '<div class="libbtns">' +
+          '<button type="button" class="primary" data-act="read">▶ อ่านต่อ</button>' +
+          '<button type="button" class="ghost" data-act="start">⤒ ตั้งแต่ต้น</button>' +
+          '<button type="button" class="ghost" data-act="done">' + (done ? "↺ ยังไม่จบ" : "✔ จบแล้ว") + "</button>" +
+          '<button type="button" class="danger" data-act="del" title="ลบเรื่องนี้">🗑️</button>' +
+        "</div>" +
+      "</div>";
+    const desc = card.querySelector(".libdesc");
+    if (desc && m.desc.length > 140) {
+      const more = document.createElement("button");
+      more.type = "button"; more.className = "lnk libmore"; more.textContent = "อ่านเพิ่ม ▾";
+      more.onclick = () => {
+        const open = desc.classList.toggle("open");
+        more.textContent = open ? "ย่อ ▴" : "อ่านเพิ่ม ▾";
+      };
+      desc.after(more);
+    }
+    card.querySelector('[data-act="read"]').onclick = () => openStory(s, false);
+    card.querySelector('[data-act="start"]').onclick = () => openStory(s, true);
+    card.querySelector('[data-act="done"]').onclick = () => toggleDone(s);
+    card.querySelector('[data-act="del"]').onclick = () => deleteStory(s);
+    card.querySelector(".libcover").onclick = () => openStory(s, false);
+    return card;
+  }
+
+  function renderPager(pages) {
+    const box = $("libPager");
+    box.innerHTML = "";
+    if (pages <= 1) return;
+    const add = (label, page, opts) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = label;
+      if (opts === "cur") b.className = "cur";
+      if (opts === "gap" || page < 1 || page > pages) b.disabled = true;
+      else b.onclick = () => { lib.page = page; renderLibrary(); $("library").scrollTop = 0; };
+      box.appendChild(b);
+    };
+    add("‹", lib.page - 1);
+    let last = 0;
+    for (let p = 1; p <= pages; p++) {
+      if (p === 1 || p === pages || Math.abs(p - lib.page) <= 1) {
+        if (p - last > 1) add("…", 0, "gap");
+        add(String(p), p, p === lib.page ? "cur" : "");
+        last = p;
+      }
+    }
+    add("›", lib.page + 1);
+  }
+
+  async function openStory(s, fromStart) {
+    if (!(state && s.id === state.id)) {
+      state = defaultState(s);
+      state.autoPlay = false;
+      await setSetting("lastSave", state.id);
+      toast("เปิดเรื่อง: " + (state.title || state.name));
+    }
+    $("modeSelect").value = state.mode;
+    show("game");
+    renderAll(!!fromStart);
+    if (fromStart) $("log").scrollTop = 0;
+  }
+
+  async function toggleDone(s) {
+    s.status = libStatus(s) === "completed" ? "ongoing" : "completed";
+    if (state && state.id === s.id) { state.status = s.status; await persist(true); }
+    else await dbPut(STORE_SAVES, s);
+    toast(s.status === "completed" ? "ทำเครื่องหมายว่าจบแล้ว" : "กลับเป็นกำลังเขียน");
+    renderLibrary();
+  }
+
+  async function deleteStory(s) {
+    if (!confirm("ลบเรื่อง \"" + (s.title || s.name) + "\" ถาวร?\n(ถ้ายังไม่ได้สำรอง ให้เปิดเรื่องแล้วดาวน์โหลดเซฟ .json ก่อน)")) return;
+    await dbDel(STORE_SAVES, s.id);
+    libMetaCache.delete(s.id);
+    libSaves = libSaves.filter(x => x.id !== s.id);
+    if (state && state.id === s.id) { state = null; $("libBack").style.display = "none"; }
+    toast("ลบแล้ว");
+    renderLibrary();
+  }
+
+  function bindLibrary() {
+    $("libBtn").onclick = openLibrary;
+    $("libBack").onclick = () => { if (state) { show("game"); scrollLog(true); } };
+    $("libNew").onclick = () => { state = null; resetSetupForm(); show("setup"); };
+    let t = null;
+    $("libSearch").oninput = () => {
+      clearTimeout(t);
+      t = setTimeout(() => { lib.q = $("libSearch").value; lib.page = 1; renderLibrary(); }, 180);
+    };
+    for (const [id, k] of [["libGenre", "genre"], ["libStatus", "status"], ["libLang", "lang"], ["libSort", "sort"]]) {
+      $(id).onchange = () => {
+        lib[k] = $(id).value; lib.page = 1;
+        // names read naturally A→Z; everything else newest/biggest first
+        if (k === "sort") lib.desc = lib.sort !== "name";
+        syncLibControls(); saveLibPrefs(); renderLibrary();
+      };
+    }
+    $("libOrder").onclick = () => { lib.desc = !lib.desc; syncLibControls(); saveLibPrefs(); renderLibrary(); };
+    $("libClear").onclick = () => { Object.assign(lib, LIB_DEFAULTS, { page: 1 }); syncLibControls(); saveLibPrefs(); renderLibrary(); };
+    $("libImport").onchange = async (e) => {
+      const f = e.target.files && e.target.files[0];
+      e.target.value = "";
+      if (f) await importSave(f);
+    };
+  }
+
+  // ============================================================
+  // Translation — Google Translate's free web endpoint (the one the
+  // Chrome dictionary extension uses). No key, no Gemini quota, not an
+  // LLM. It is unofficial, so a second Google endpoint and MyMemory
+  // (free, 5000 chars/day) stand behind it.
+  // ============================================================
+  const TR_LANGS = [
+    ["auto", "อัตโนมัติ (ไทย ↔ อังกฤษ)"], ["th", "ไทย"], ["en", "English"],
+    ["zh-CN", "中文 (จีน)"], ["ja", "日本語 (ญี่ปุ่น)"], ["ko", "한국어 (เกาหลี)"],
+    ["vi", "Tiếng Việt (เวียดนาม)"], ["lo", "ລາວ (ลาว)"], ["my", "မြန်မာ (พม่า)"],
+    ["id", "Bahasa Indonesia"], ["ms", "Bahasa Melayu"], ["fr", "Français"], ["es", "Español"],
+  ];
+  const TR_CHUNK = 4500;   // chars per request
+
+  const trTarget = (text) => settings.trTo && settings.trTo !== "auto"
+    ? settings.trTo : (isThai(text) ? "en" : "th");
+  const trName = (code) => ((TR_LANGS.find(l => l[0] === code) || [code, code])[1]).replace(/ \(.*\)$/, "");
+
+  // Paragraphs grouped into requests, so each comes back as its own piece
+  // and the line breaks of the chapter survive the round trip.
+  function trBatches(text) {
+    const paras = String(text).split(/\n/);
+    const out = [];
+    let cur = [], size = 0;
+    for (let p of paras) {
+      while (p.length > TR_CHUNK) {       // a single giant paragraph
+        const cut = Math.max(p.lastIndexOf(" ", TR_CHUNK), p.lastIndexOf(".", TR_CHUNK), TR_CHUNK / 2);
+        out.push([p.slice(0, cut)]);
+        p = p.slice(cut);
+      }
+      if (size + p.length > TR_CHUNK && cur.length) { out.push(cur); cur = []; size = 0; }
+      cur.push(p); size += p.length + 1;
+    }
+    if (cur.length) out.push(cur);
+    return out;
+  }
+
+  async function trGoogle(paras, to) {
+    const idx = [], qs = [];
+    paras.forEach((p, i) => { if (p.trim()) { idx.push(i); qs.push("q=" + encodeURIComponent(p)); } });
+    const res = paras.slice();
+    if (!qs.length) return res;
+    const r = await fetch("https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl=" + encodeURIComponent(to), {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: qs.join("&"),
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    if (!Array.isArray(j) || j.length !== idx.length) throw new Error("รูปแบบผลแปลไม่ถูกต้อง");
+    j.forEach((x, k) => { res[idx[k]] = Array.isArray(x) ? x[0] : String(x); });
+    return res;
+  }
+
+  async function trGtx(paras, to) {
+    const r = await fetch("https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&dt=t&tl=" +
+      encodeURIComponent(to) + "&q=" + encodeURIComponent(paras.join("\n")));
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    return j[0].map(x => x[0]).join("").split("\n");
+  }
+
+  async function trMyMemory(paras, to, from) {
+    const out = [];
+    for (const p of paras) {
+      if (!p.trim()) { out.push(p); continue; }
+      const bits = p.match(/[^.!?。！？]+[.!?。！？]*\s*/g) || [p];
+      let line = "", piece = "";
+      const flush = async () => {
+        if (!piece.trim()) return;
+        const r = await fetch("https://api.mymemory.translated.net/get?langpair=" + from + "|" + to +
+          "&q=" + encodeURIComponent(piece));
+        const j = await r.json();
+        if (j.quotaFinished || +j.responseStatus !== 200) throw new Error(j.responseDetails || "โควตา MyMemory หมด");
+        line += j.responseData.translatedText + " ";
+        piece = "";
+      };
+      for (const b of bits) { if (piece.length + b.length > 450) await flush(); piece += b; }
+      await flush();
+      out.push(line.trim());
+    }
+    return out;
+  }
+
+  async function translateText(text, to) {
+    const out = [];
+    for (const batch of trBatches(text)) {
+      let got = null, err = null;
+      for (const f of [trGoogle, trGtx, (p, t) => trMyMemory(p, t, isThai(text) ? "th" : "en")]) {
+        try { got = await f(batch, to); break; } catch (e) { err = e; }
+      }
+      if (!got) throw err || new Error("แปลไม่สำเร็จ");
+      out.push(got.join("\n"));
+    }
+    return out.join("\n");
+  }
+
+  function trPanel(row, to, text) {
+    const panel = document.createElement("div");
+    panel.className = "msg trans";
+    panel.innerHTML = '<div class="trhead"><span>🌐 คำแปล · ' + esc(trName(to)) +
+      ' <span class="dim">(Google Translate)</span></span><button type="button" class="x" title="ซ่อนคำแปล">✕</button></div>' +
+      '<div class="trbody"></div>';
+    panel.querySelector(".trbody").textContent = text;
+    panel.querySelector(".x").onclick = () => {
+      panel.remove();
+      const b = row.querySelector(".trbtn");
+      if (b) { b.textContent = "🌐 แปล"; b.classList.remove("on"); }
+    };
+    return panel;
+  }
+
+  async function toggleTranslation(row, btn) {
+    const open = row.nextElementSibling;
+    if (open && open.classList.contains("trans")) {
+      open.querySelector(".x").click();
+      return;
+    }
+    const text = String(row.trText || "").trim();
+    if (!text) { toast("รอให้เขียนตอนนี้จบก่อน แล้วค่อยกดแปล"); return; }
+    const to = trTarget(text);
+    // cached in the save: reopening a translated chapter costs no request
+    const msg = state && state.log.find(m => m.role === "assistant" && m.content === row.trText);
+    let out = msg && msg.tr && msg.tr.to === to ? msg.tr.text : null;
+    if (!out) {
+      if (typeof navigator !== "undefined" && navigator.onLine === false) { toast("ต้องต่ออินเทอร์เน็ตเพื่อแปล"); return; }
+      btn.disabled = true; btn.textContent = "⏳ กำลังแปล…";
+      try {
+        out = await translateText(text, to);
+      } catch (e) {
+        btn.disabled = false; btn.textContent = "🌐 แปล";
+        toast("แปลไม่สำเร็จ (" + (e.message || "เครือข่าย") + ") — ลองใหม่อีกครั้ง", 4000);
+        return;
+      }
+      btn.disabled = false;
+      if (msg) { msg.tr = { to, text: out }; persist(); }
+    }
+    row.after(trPanel(row, to, out));
+    btn.textContent = "🌐 ซ่อนคำแปล";
+    btn.classList.add("on");
+  }
+
+  function bindTranslate() {
+    const sel = $("trToSelect");
+    sel.innerHTML = TR_LANGS.map(l => '<option value="' + esc(l[0]) + '">' + esc(l[1]) + "</option>").join("");
+    sel.value = TR_LANGS.some(l => l[0] === settings.trTo) ? settings.trTo : "auto";
+    sel.onchange = async () => {
+      settings.trTo = sel.value;
+      try { await setSetting("trTo", settings.trTo); } catch (e) { }
+      toast("ปุ่ม 🌐 จะแปลเป็น: " + (settings.trTo === "auto" ? "ไทย ↔ อังกฤษ อัตโนมัติ" : trName(settings.trTo)));
     };
   }
 
@@ -2907,11 +3284,15 @@
     const epc = parseInt(await getSetting("epCount", "3"), 10);
     settings.epCount = [0, 1, 3, 5, 10].indexOf(epc) >= 0 ? epc : 3;
     settings.epVoice = String(await getSetting("epVoice", "0")) === "1";
+    settings.trTo = String(await getSetting("trTo", "auto"));
+    const lp = await getSetting("libPrefs", null);
+    if (lp && typeof lp === "object") Object.assign(lib, lp, { page: 1 });
     const savedList = await getSetting("modelList", null);
     if (Array.isArray(savedList) && savedList.length) modelList = savedList;
 
     bindSetup(); bindInput(); bindDrawer(); bindTurnTools(); bindScrollFollow();
-    bindStateEditor(); bindChapters(); bindExport(); bindSlots(); bindSettings(); bindVocab();
+    bindStateEditor(); bindChapters(); bindExport(); bindLibrary(); bindSettings(); bindVocab();
+    bindTranslate();
     bindEpisodes();
 
     // Chrome loads voices lazily; ask early so the first 🔊 gets a good one

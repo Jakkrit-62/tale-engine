@@ -284,3 +284,57 @@ mark.vw { background:none; color:inherit; border-bottom:2px dotted var(--accent)
 .msg.ai.episode .sent.eph { font-weight:700; font-size:1.12em; color:var(--accent); }
 .msg.ai.episode .sent.eph.now { color:var(--accent-ink); }
 .msgtools .wc { align-self:center; font-size:12px; color:var(--dim); padding:0 4px; }
+
+/* ---------- คลังนิยาย (Library) ---------- */
+#library { flex:1; overflow-y:auto; padding:calc(18px + env(safe-area-inset-top)) 16px calc(30px + env(safe-area-inset-bottom)); }
+#library h1 { font-size:22px; margin:0; }
+#library .setuphead { margin-bottom:14px; }
+#library .setupactions button { padding:9px 12px; font-size:13.5px; }
+.libsearch { width:100%; border:1px solid var(--border); border-radius:12px; padding:11px 14px;
+  font-size:16px; background:var(--bg-el); color:var(--ink); }
+.libfilters { display:flex; flex-wrap:wrap; gap:8px 10px; align-items:flex-end; margin:10px 0 14px; }
+.libfilters label { display:flex; flex-direction:column; gap:3px; flex:1 1 120px; min-width:0;
+  font-size:11.5px; color:var(--dim); text-transform:uppercase; letter-spacing:.04em; }
+.libfilters select { padding:8px 10px; font-size:14px; }
+.libfilters button.ghost { height:38px; padding:0 12px; white-space:nowrap; }
+.libgrid { display:grid; grid-template-columns:1fr; gap:12px; }
+@media (min-width:760px) { .libgrid { grid-template-columns:1fr 1fr; } }
+.libempty { text-align:center; padding:40px 12px; border:1px dashed var(--border); border-radius:14px; line-height:1.7; }
+.libcard { display:flex; gap:12px; background:var(--bg-el); border:1px solid var(--border);
+  border-radius:14px; padding:12px; box-shadow:var(--shadow); min-width:0; }
+.libcard.current { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent), var(--shadow); }
+.libcover { --h:20; flex:0 0 92px; height:128px; border-radius:10px; cursor:pointer; position:relative; overflow:hidden;
+  background:linear-gradient(155deg, hsl(var(--h) 55% 42%), hsl(calc(var(--h) + 40) 50% 22%));
+  color:#fff; display:flex; flex-direction:column; justify-content:space-between; padding:8px; }
+.libicon { font-size:26px; }
+.libctitle { font-size:12px; font-weight:700; line-height:1.3; text-shadow:0 1px 3px rgba(0,0,0,.5);
+  display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; word-break:break-word; }
+.libbody { flex:1; min-width:0; display:flex; flex-direction:column; gap:6px; }
+.libtop { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.libtop h2 { font-size:16px; margin:0; flex:1 1 100%; line-height:1.35; word-break:break-word; }
+.libst { font-size:11px; border-radius:6px; padding:1px 7px; background:var(--ok); color:#fff; }
+.libst.done { background:var(--dim); }
+.libstats { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:12.5px; color:var(--dim); }
+.libtags { display:flex; flex-wrap:wrap; gap:5px; }
+.libtags span { background:var(--chip); border-radius:999px; padding:2px 9px; font-size:11.5px; }
+.liblast { font-size:12.5px; color:var(--accent); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.libdesc { margin:0; font-size:13px; line-height:1.55; color:var(--dim);
+  display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; white-space:pre-line; }
+.libdesc.open { display:block; }
+.libmore { align-self:flex-start; margin-top:-4px; }
+.libbtns { display:flex; flex-wrap:wrap; gap:6px; margin-top:auto; padding-top:4px; }
+.libbtns button { padding:8px 11px; font-size:13px; border-radius:9px; }
+.libbtns button.primary { flex:1 1 110px; }
+.libpager { display:flex; flex-wrap:wrap; justify-content:center; gap:6px; margin:18px 0 6px; }
+.libpager button { min-width:38px; height:38px; border-radius:9px; border:1px solid var(--border);
+  background:var(--bg-el); color:var(--ink); font-size:14px; }
+.libpager button.cur { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:700; }
+.libimport { margin-top:14px; text-align:center; }
+@media (max-width:380px) { .libcover { flex-basis:72px; height:104px; } .libicon { font-size:20px; } }
+
+/* ---------- คำแปล ---------- */
+.msg.trans { align-self:flex-start; max-width:96%; background:var(--bg); border:1px dashed var(--accent);
+  box-shadow:none; font-size:14.5px; }
+.trhead { display:flex; justify-content:space-between; align-items:center; gap:8px;
+  font-size:12px; color:var(--accent); font-weight:700; margin-bottom:6px; white-space:normal; }
+.trhead .x { background:none; border:none; color:var(--dim); font-size:15px; padding:0 2px; }

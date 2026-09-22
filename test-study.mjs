@@ -198,7 +198,7 @@ mock = "thai"; await play("เดิน");
 check("Thai rule in prompt", sysText().includes("ภาษาไทยเสมอ"));
 
 out.push("[10] Read aloud");
-const tools = () => q("#log .msgtools button");
+const tools = () => q("#log .msgtools button:not(.trbtn)");
 check("one 🔊 button per story bubble", tools().length === ai().length, tools().length + " vs " + ai().length);
 const enIdx = 0;
 spoken.length = 0;
