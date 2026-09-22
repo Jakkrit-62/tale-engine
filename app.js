@@ -3290,10 +3290,13 @@
     const savedList = await getSetting("modelList", null);
     if (Array.isArray(savedList) && savedList.length) modelList = savedList;
 
-    bindSetup(); bindInput(); bindDrawer(); bindTurnTools(); bindScrollFollow();
-    bindStateEditor(); bindChapters(); bindExport(); bindLibrary(); bindSettings(); bindVocab();
-    bindTranslate();
-    bindEpisodes();
+    // One broken binding (e.g. a page/script version mismatch) must not stop
+    // the app from opening — log it and carry on with the rest.
+    for (const bind of [bindSetup, bindInput, bindDrawer, bindTurnTools, bindScrollFollow,
+      bindStateEditor, bindChapters, bindExport, bindLibrary, bindSettings, bindVocab,
+      bindTranslate, bindEpisodes]) {
+      try { bind(); } catch (e) { console.error("bind " + bind.name + ":", e); }
+    }
 
     // Chrome loads voices lazily; ask early so the first 🔊 gets a good one
     if (ttsSupported() && window.speechSynthesis.getVoices) window.speechSynthesis.getVoices();
@@ -3324,10 +3327,37 @@
       if (!settings.apiKey) setTimeout(openSettings, 400);
     }
 
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("./sw.js").catch(() => { });
-    }
+    window.__taleBooted = true;
+    try { setupUpdates(); } catch (e) { }
   }
 
-  boot();
+  // The service worker serves the app from cache and fetches updates in the
+  // background; it says so when a complete new version is stored.
+  function setupUpdates() {
+    if (!("serviceWorker" in navigator)) return;
+    const sw = navigator.serviceWorker;
+    sw.register("./sw.js", { updateViaCache: "none" }).catch(() => { });
+    const bar = $("updateBar");
+    if (sw.addEventListener) sw.addEventListener("message", (e) => {
+      if (!e.data || e.data.type !== "tale-updated" || !bar) return;
+      bar.style.display = "block";
+    });
+    if (bar) bar.onclick = async () => {
+      if (busy) { toast("รอให้เขียนตอนนี้จบก่อน แล้วค่อยอัปเดต"); return; }
+      stopEpisodes();
+      if (state) { try { await persist(true); } catch (e) { } }
+      location.reload();
+    };
+    // an installed PWA can stay open for days: check again when it comes back
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && sw.controller) {
+        sw.controller.postMessage({ type: "tale-check" });
+      }
+    });
+  }
+
+  boot().catch((e) => {
+    console.error("boot:", e);
+    if (window.__taleBootFail) window.__taleBootFail("⚠️ เปิดแอปไม่สำเร็จ: " + (e && e.message || e));
+  });
 })();

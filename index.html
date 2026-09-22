@@ -27,8 +27,60 @@
     <div class="bootlogo">🗡️</div>
     <div class="bootname">Tale Engine</div>
     <div id="bootMsg" class="dim">กำลังโหลด…</div>
+    <div id="bootFix" class="bootfix" style="display:none">
+      <div id="bootFixMsg" class="sm"></div>
+      <button type="button" id="bootFixBtn" class="primary">🧹 ล้างแคชแอปแล้วโหลดใหม่</button>
+      <div class="dim sm">เรื่องที่บันทึกไว้และ API key <b>ไม่หาย</b> — ล้างเฉพาะไฟล์ตัวแอป</div>
+    </div>
   </div>
 </div>
+<button type="button" id="updateBar" class="updatebar" style="display:none">🔄 มีเวอร์ชันใหม่ — แตะเพื่ออัปเดต</button>
+
+<script>
+/* Boot guard — inline on purpose, so it still works when app.js is broken,
+   missing or mismatched with this page. Never leaves the spinner forever. */
+(function () {
+  var shown = false;
+  function offer(msg) {
+    if (window.__taleBooted || shown) return;
+    shown = true;
+    var box = document.getElementById("bootFix");
+    document.getElementById("bootFixMsg").textContent = msg;
+    box.style.display = "block";
+  }
+  window.__taleBootFail = offer;
+  window.addEventListener("error", function (e) {
+    offer("⚠️ เปิดแอปไม่สำเร็จ: " + (e && e.message ? e.message : "ไฟล์แอปโหลดไม่ครบ"));
+  });
+  setTimeout(function () { offer("⏳ โหลดนานผิดปกติ — ถ้ายังค้างอยู่ กดปุ่มด้านล่าง"); }, 10000);
+  document.getElementById("bootFixBtn").onclick = function () {
+    var jobs = [];
+    if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+      jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) {
+        return Promise.all(rs.map(function (r) { return r.unregister(); }));
+      }));
+    }
+    if (window.caches) {
+      jobs.push(caches.keys().then(function (ks) {
+        return Promise.all(ks.map(function (k) { return caches.delete(k); }));
+      }));
+    }
+    // re-download every app file past the browser's HTTP cache too
+    // (GitHub Pages lets it keep a copy for 10 minutes)
+    var files = ["./", "./index.html", "./app.js", "./styles.css", "./qidian-mode/qidian.js", "./sw.js", "./manifest.json"];
+    this.disabled = true;
+    this.textContent = "⏳ กำลังโหลดใหม่…";
+    Promise.all(jobs).catch(function () { }).then(function () {
+      if (!window.fetch) return;
+      return Promise.all(files.map(function (f) {
+        return fetch(f, { cache: "reload" }).catch(function () { });
+      }));
+    }).then(function () {
+      location.replace(location.pathname + "?fresh=" + Date.now());
+    });
+  };
+})();
+</script>
 
 <!-- ============ SETUP ============ -->
 <div id="setup" style="display:none">
